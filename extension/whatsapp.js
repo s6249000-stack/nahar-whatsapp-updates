@@ -51,6 +51,27 @@
    const m=main();if(!m)return null;
    return [...m.querySelectorAll('footer [contenteditable="true"],[data-testid="conversation-compose-box-input"],[contenteditable="true"][role="textbox"]')].find(visible)||null;
  }
+ function clickAsUser(element){
+   if(!element)return false;
+   try{element.scrollIntoView({block:'center',inline:'nearest'});}catch{}
+   const target=element.closest('[role="listitem"],[data-testid="cell-frame-container"],[role="row"]')||element;
+   const rect=target.getBoundingClientRect();
+   const x=rect.left+Math.max(4,Math.min(rect.width/2,rect.width-4)),y=rect.top+Math.max(4,Math.min(rect.height/2,rect.height-4));
+   const common={bubbles:true,cancelable:true,composed:true,clientX:x,clientY:y,button:0,buttons:1,view:window};
+   target.dispatchEvent(new PointerEvent('pointerover',{...common,pointerId:1,pointerType:'mouse',isPrimary:true}));
+   target.dispatchEvent(new MouseEvent('mouseover',common));
+   target.dispatchEvent(new PointerEvent('pointerdown',{...common,pointerId:1,pointerType:'mouse',isPrimary:true}));
+   target.dispatchEvent(new MouseEvent('mousedown',common));
+   target.dispatchEvent(new PointerEvent('pointerup',{...common,buttons:0,pointerId:1,pointerType:'mouse',isPrimary:true}));
+   target.dispatchEvent(new MouseEvent('mouseup',{...common,buttons:0}));
+   target.dispatchEvent(new MouseEvent('click',{...common,buttons:0}));
+   return true;
+ }
+ function rowSummary(el){
+   if(!el)return 'ללא שורה';
+   const e=el.closest('[role="listitem"],[data-testid="cell-frame-container"],[role="row"]')||el;
+   return 'תגית '+e.tagName+'; תפקיד '+(e.getAttribute('role')||'-')+'; testid '+(e.getAttribute('data-testid')||'-')+'; גודל '+Math.round(e.getBoundingClientRect().width)+'x'+Math.round(e.getBoundingClientRect().height);
+ }
  async function ensureGroup(group){
    if(activeIs(group))return;
    let row=sidebarMatch(group);
@@ -67,10 +88,16 @@
    const titleNode=[...row.querySelectorAll('[title],[aria-label],[dir="auto"]')].find(e=>
      norm(e.getAttribute('title'))===norm(group)||norm(e.getAttribute('aria-label'))===norm(group)||(e.children.length===0&&norm(e.textContent)===norm(group))
    );
-   const clickTarget=titleNode?.closest('[role="button"],[tabindex="0"]')||titleNode||row;
-   clickTarget.click();
-   for(let i=0;i<28&&!activeIs(group);i++)await delay(300);
-   if(!activeIs(group))throw Error('נפתחה שיחה אך אי אפשר לאמת את קבוצת הבדיקות. '+diagnosis());
+   const clickTarget=titleNode?.closest('[role="listitem"],[data-testid="cell-frame-container"],[role="row"],[role="button"],[tabindex="0"]')||row;
+   // Attempt a full pointer/mouse sequence on the actual chat row; bare .click() was not opening the React chat.
+   clickAsUser(clickTarget);
+   for(let i=0;i<16&&!activeIs(group);i++)await delay(250);
+   if(!activeIs(group)){
+     // A second, different interaction path: click the exact title node instead of the surrounding row.
+     if(titleNode&&titleNode!==clickTarget)clickAsUser(titleNode);
+     for(let i=0;i<12&&!activeIs(group);i++)await delay(250);
+   }
+   if(!activeIs(group))throw Error('בוצעו אירועי עכבר בשיחת הבדיקות אך לא נפתח אזור שיחה. '+rowSummary(clickTarget)+'. '+diagnosis());
  }
  async function send(text,group){
    if(typeof group!=='string'||group.length<3||group.length>160||!text?.trim())throw Error('שם קבוצה או הודעה לא תקינים');
