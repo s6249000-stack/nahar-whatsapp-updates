@@ -51,10 +51,10 @@
    const m=main();if(!m)return null;
    return [...m.querySelectorAll('footer [contenteditable="true"],[data-testid="conversation-compose-box-input"],[contenteditable="true"][role="textbox"]')].find(visible)||null;
  }
- function clickAsUser(element){
+ function clickAsUser(element,direct=false){
    if(!element)return false;
    try{element.scrollIntoView({block:'center',inline:'nearest'});}catch{}
-   const target=element.closest('[role="listitem"],[data-testid="cell-frame-container"],[role="row"]')||element;
+   const target=direct?element:(element.closest('[role="listitem"],[data-testid="cell-frame-container"],[role="row"]')||element);
    const rect=target.getBoundingClientRect();
    const x=rect.left+Math.max(4,Math.min(rect.width/2,rect.width-4)),y=rect.top+Math.max(4,Math.min(rect.height/2,rect.height-4));
    const common={bubbles:true,cancelable:true,composed:true,clientX:x,clientY:y,button:0,buttons:1,view:window};
@@ -94,7 +94,7 @@
    for(let i=0;i<16&&!activeIs(group);i++)await delay(250);
    if(!activeIs(group)){
      // A second, different interaction path: click the exact title node instead of the surrounding row.
-     if(titleNode&&titleNode!==clickTarget)clickAsUser(titleNode);
+     if(titleNode&&titleNode!==clickTarget)clickAsUser(titleNode,true);
      for(let i=0;i<12&&!activeIs(group);i++)await delay(250);
    }
    if(!activeIs(group))throw Error('בוצעו אירועי עכבר בשיחת הבדיקות אך לא נפתח אזור שיחה. '+rowSummary(clickTarget)+'. '+diagnosis());
