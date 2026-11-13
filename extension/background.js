@@ -6,6 +6,31 @@ let ongoing=false;
 let nearTermTimer=null;
 async function status(phase, detail='') {await chrome.storage.local.set({lastStatus:{phase,detail,at:new Date().toISOString()}});}
 async function setAlarm(job) {await chrome.alarms.clear(ALARM);await chrome.alarms.create(ALARM,{when:job.when});}
+async function activateWhatsappTab(){
+ const tabs=await chrome.tabs.query({url:'https://web.whatsapp.com/*'});
+ if(!tabs.length)throw Error('לא נמצאה לשונית WhatsApp Web. פתח אותה פעם אחת באותו Chrome ונסה שוב');
+ const tab=tabs.find(t=>t.active&&t.windowId!==undefined)||tabs.find(t=>t.status==='complete')||tabs[0];
+ if(tab.windowId!==undefined)await chrome.windows.update(tab.windowId,{focused:true});
+ await chrome.tabs.update(tab.id,{active:true});
+ return tab;
+}
+async function probeWhatsappTab(tab){
+ let lastError='';
+ for(let i=0;i<24;i++){
+  try{
+   let pong;
+   try{pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING'});}
+   catch(e){
+    await chrome.scripting.executeScript({target:{tabId:tab.id},files:['whatsapp.js']});
+    pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING'});
+   }
+   if(pong?.ok&&(pong.hasSide||pong.hasMain))return pong;
+   lastError='WhatsApp Web עדיין טוען את רשימת השיחות';
+  }catch(e){lastError=String(e?.message||e)}
+  await new Promise(resolve=>setTimeout(resolve,350));
+ }
+ throw Error('WhatsApp Web לא נטען לאחר מעבר ללשונית. '+lastError.slice(0,180));
+}
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse)=>{
  if(!['SCHEDULE_TEST','STATUS_TEST'].includes(msg?.type)) return;
  if(msg.type==='STATUS_TEST'){
@@ -29,6 +54,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse)=>{
   await chrome.storage.local.set({[GROUP_LOCK]:job.group});
   await chrome.storage.local.set({[JOB]:item});await setAlarm(item);await status('scheduled',new Date(item.when).toLocaleString('he-IL'));
   scheduleNearTerm(item);
+  // Move to the existing WhatsApp Web tab immediately, visibly, before the three-second test.
+  try { await activateWhatsappTab(); }
+  catch(e){ await status('failed',String(e.message||e));await chrome.alarms.clear(ALARM);if(nearTermTimer!==null){clearTimeout(nearTermTimer);nearTermTimer=null;}item.phase='failed';await chrome.storage.local.set({[JOB]:item});throw e; }
   return {ok:true,id:item.id};
  })().then(sendResponse).catch(e=>sendResponse({ok:false,error:e.message}));return true;
 });
@@ -52,24 +80,8 @@ async function sendDueJob(expectedId){
   const r=await chrome.storage.local.get(JOB),job=r[JOB];if(!job||job.phase!=='scheduled'||(expectedId&&job.id!==expectedId))return;
   if(Date.now()+1000<job.when){await setAlarm(job);return;}
   job.phase='processing';await chrome.storage.local.set({[JOB]:job});await status('processing','מנסה לפרסם בקבוצת הבדיקות');
-  const tabs=await chrome.tabs.query({url:'https://web.whatsapp.com/*'});
-  if(!tabs.length)throw Error('לא נמצאה לשונית WhatsApp Web פתוחה. פתח את WhatsApp Web בחלון Chrome זה ונסה שוב');
-  // A content script from an unpacked extension does not automatically attach to an already-open tab after reload.
-  // Probe first, inject only when necessary, and never create a new tab or retry a possibly-executed send.
-  let tab=null, lastConnectionError='';
-  for(const candidate of tabs){
-   try{
-    try{
-     const pong=await chrome.tabs.sendMessage(candidate.id,{type:'WA_TEST_PING'});
-     if(pong?.ok){tab=candidate;break;}
-    }catch(initialError){
-     await chrome.scripting.executeScript({target:{tabId:candidate.id},files:['whatsapp.js']});
-     const pong=await chrome.tabs.sendMessage(candidate.id,{type:'WA_TEST_PING'});
-     if(pong?.ok){tab=candidate;break;}
-    }
-   }catch(error){lastConnectionError=String(error?.message||error).slice(0,220);}
-  }
-  if(!tab)throw Error('לא הצלחתי להפעיל את רכיב WhatsApp בלשונית הקיימת. '+(lastConnectionError||'רענן את WhatsApp Web ונסה שוב'));
+  const tab=await activateWhatsappTab();
+  await probeWhatsappTab(tab);
   // Exactly one send attempt; errors are not automatically retried to avoid duplicate WhatsApp messages.
   let result;
   try{result=await chrome.tabs.sendMessage(tab.id,{type:'SEND_TEST',group:job.group,text:job.text,id:job.id});}
