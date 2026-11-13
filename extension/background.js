@@ -39,15 +39,29 @@ chrome.alarms.onAlarm.addListener(async a=>{
   const r=await chrome.storage.local.get(JOB),job=r[JOB];if(!job||job.phase!=='scheduled')return;
   if(Date.now()+1000<job.when){await setAlarm(job);return;}
   job.phase='processing';await chrome.storage.local.set({[JOB]:job});await status('processing','מנסה לפרסם בקבוצת הבדיקות');
-  let tabs=await chrome.tabs.query({url:'https://web.whatsapp.com/*'});
-  let tab=tabs[0];
-  if(!tab)tab=await chrome.tabs.create({url:'https://web.whatsapp.com/',active:false});
-  let result;
-  for(let attempt=0;attempt<20;attempt++){
-   try {result=await chrome.tabs.sendMessage(tab.id,{type:'SEND_TEST',group:job.group,text:job.text,id:job.id});break;}
-   catch(e){await new Promise(r=>setTimeout(r,1500));}
+  const tabs=await chrome.tabs.query({url:'https://web.whatsapp.com/*'});
+  if(!tabs.length)throw Error('לא נמצאה לשונית WhatsApp Web פתוחה. פתח את WhatsApp Web בחלון Chrome זה ונסה שוב');
+  // A content script from an unpacked extension does not automatically attach to an already-open tab after reload.
+  // Probe first, inject only when necessary, and never create a new tab or retry a possibly-executed send.
+  let tab=null, lastConnectionError='';
+  for(const candidate of tabs){
+   try{
+    try{
+     const pong=await chrome.tabs.sendMessage(candidate.id,{type:'WA_TEST_PING'});
+     if(pong?.ok){tab=candidate;break;}
+    }catch(initialError){
+     await chrome.scripting.executeScript({target:{tabId:candidate.id},files:['whatsapp.js']});
+     const pong=await chrome.tabs.sendMessage(candidate.id,{type:'WA_TEST_PING'});
+     if(pong?.ok){tab=candidate;break;}
+    }
+   }catch(error){lastConnectionError=String(error?.message||error).slice(0,220);}
   }
-  if(!result)throw Error('WhatsApp Web לא זמין. ודא שהחשבון מחובר וש-Chrome פתוח');
+  if(!tab)throw Error('לא הצלחתי להפעיל את רכיב WhatsApp בלשונית הקיימת. '+(lastConnectionError||'רענן את WhatsApp Web ונסה שוב'));
+  // Exactly one send attempt; errors are not automatically retried to avoid duplicate WhatsApp messages.
+  let result;
+  try{result=await chrome.tabs.sendMessage(tab.id,{type:'SEND_TEST',group:job.group,text:job.text,id:job.id});}
+  catch(error){throw Error('חיבור התוסף ללשונית אבד בזמן השליחה: '+String(error?.message||error).slice(0,180));}
+  if(!result)throw Error('WhatsApp Web לא החזיר תשובה מניסיון השליחה');
   if(!result.ok)throw Error(result.error||'השליחה לא אושרה');
   job.phase='attempted';await chrome.storage.local.set({[JOB]:job});await status('attempted','ניסיון שליחה בוצע; יש לבדוק בקבוצה שההודעה נראית');
   chrome.notifications.create({type:'basic',iconUrl:'icon.png',title:'נהר שלום — בדיקת תזמון',message:'ניסיון השליחה בוצע. ודא שההודעה הופיעה בקבוצה.'});
