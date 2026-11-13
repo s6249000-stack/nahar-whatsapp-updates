@@ -1,7 +1,7 @@
 (() => {
  'use strict';
- if (globalThis.__naharWaTestScriptReady) return;
- globalThis.__naharWaTestScriptReady=true;
+ if (globalThis.__naharWaTestScriptV030) return;
+ globalThis.__naharWaTestScriptV030=true;
  let sending=false;
  const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
  const norm=s=>String(s||'').normalize('NFC').replace(/[\u200e\u200f\u061c\u202a-\u202e\u2066-\u2069]/g,'').replace(/\s+/g,' ').trim();
@@ -10,7 +10,9 @@
  const attrs=(e,a)=>e?.getAttribute(a)||'';
  const isShown=e=>!!(e&&e.isConnected&&e.getClientRects().length&&getComputedStyle(e).visibility!=='hidden');
  const side=()=>document.querySelector('#side');
- const cleanName=s=>norm(s).replace(/[\u200b\u2060]/g,'');
+ // Exact lexical group name. Emoji decorations differ between the saved group label and the live WhatsApp UI.
+ // Never use the pinned-chat position as proof of identity.
+ const cleanName=s=>norm(s).replace(/[^\p{L}\p{N}]+/gu,' ').trim();
  function headerNames(){
   const h=document.querySelector('#main header');
   if(!isShown(h))return [];
@@ -60,27 +62,27 @@
   let search=null;
   for(let i=0;i<30;i++){search=mainSearch();if(search)break;await delay(150);}
   if(!search)throw Error('לא נמצא שדה החיפוש הראשי. '+diagnosis());
+  // Search for the distinctive Hebrew name, not emoji decorations that may have changed.
+  const query=cleanName(group);
   const current=cleanName(searchContent(search));
-  if(current&&current!==cleanName(group))throw Error('קיים חיפוש אחר בוואטסאפ. לא דרסתי אותו. '+diagnosis());
-  setSearch(search,group);
+  if(current&&current!==query)throw Error('קיים חיפוש אחר בוואטסאפ. לא דרסתי אותו. '+diagnosis());
+  setSearch(search,query);
   await delay(350);
-  if(cleanName(searchContent(search))!==cleanName(group))throw Error('שם קבוצת הבדיקות לא נקלט בחיפוש. '+diagnosis());
+  if(cleanName(searchContent(search))!==query)throw Error('שם קבוצת הבדיקות לא נקלט בחיפוש. '+diagnosis());
   let picked=null;
   for(let i=0;i<30;i++){
    const rows=resultRowsForName(group);
    if(rows.length===1){picked=rows[0];break;}
-   if(rows.length>1)throw Error('נמצאו כמה תוצאות זהות לשם קבוצת הבדיקות — השליחה בוטלה');
+   if(rows.length>1)throw Error('נמצאו כמה שיחות עם אותו שם קבוצת בדיקות — בוטל כדי לא לשלוח בטעות');
    await delay(180);
   }
   if(!picked)throw Error('קבוצת הבדיקות לא נמצאה כתוצאה מדויקת. '+diagnosis());
-  const old=headerNames().join('|');
   picked.click();
-  for(let i=0;i<30;i++){
+  for(let i=0;i<35;i++){
    await delay(170);
-   if(activeIs(group)&&editor()&&headerNames().join('|')!==old)return;
    if(activeIs(group)&&editor())return;
   }
-  throw Error('לא נפתחה קבוצת הבדיקות לאחר הלחיצה. '+diagnosis());
+  throw Error('נמצאה קבוצת הבדיקות ברשימה אך לא אומתה פתיחת השיחה. '+diagnosis());
  }
  async function send(text,group){
    if(typeof group!=='string'||group.length<3||group.length>160||!text?.trim())throw Error('שם קבוצה או הודעה לא תקינים');
@@ -100,8 +102,8 @@
    return {ok:true,detail:'נלחץ כפתור שליחה; יש לאמת שההודעה הופיעה בקבוצה'};
  }
  chrome.runtime.onMessage.addListener((msg,sender,respond)=>{
-   if(msg?.type==='WA_TEST_PING'){respond({ok:true,ready:true,hasMain:!!main(),hasSide:!!document.querySelector('#pane-side'),active:!!editor()});return;}
-   if(msg?.type!=='SEND_TEST')return;
+   if(msg?.type==='WA_TEST_PING_V030'){respond({ok:true,version:'0.3.0',ready:true,hasMain:!!main(),hasSide:!!document.querySelector('#pane-side'),active:!!editor()});return;}
+   if(msg?.type!=='SEND_TEST_V030')return;
    if(sending){respond({ok:false,error:'ניסיון שליחה כבר מתבצע'});return;}
    if(typeof msg.group!=='string'||typeof msg.text!=='string'){respond({ok:false,error:'נתוני הבדיקה לא תקינים'});return;}
    sending=true;
