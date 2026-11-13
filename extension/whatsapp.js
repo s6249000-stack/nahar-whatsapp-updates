@@ -11,8 +11,12 @@
  }
  function compose(){return [...document.querySelectorAll('[contenteditable="true"][role="textbox"],footer [contenteditable="true"]')].find(visible);}
  function selectedTitle(group){
-  const header=document.querySelector('header');if(!header)return '';
-  return [...header.querySelectorAll('[title]')].map(e=>e.getAttribute('title')).find(t=>normalized(t)===normalized(GROUP))||'';
+  const header=document.querySelector('#main header') || document.querySelector('header');if(!header)return '';
+  const expected=normalized(group);
+  const names=[...header.querySelectorAll('[title]')].map(e=>e.getAttribute('title'))
+    .concat([...header.querySelectorAll('[dir="auto"]')].map(e=>e.textContent))
+    .filter(Boolean).map(normalized);
+  return names.find(t=>t===expected)||'';
  }
  async function send(text,groupName){
   if(!authorizedGroup(groupName))throw Error('שם יעד לא תקין');
