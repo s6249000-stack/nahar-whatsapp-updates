@@ -1,5 +1,7 @@
 (() => {
  'use strict';
+ if(globalThis.__naharWaTestScriptReady)return;
+ globalThis.__naharWaTestScriptReady=true;
  const authorizedGroup=group=>typeof group==='string'&&group.length>=3&&group.length<=160;
  let sending=false;
  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -56,6 +58,7 @@
   button.click();return {ok:true};
  }
  chrome.runtime.onMessage.addListener((msg,sender,respond)=>{
+  if(msg?.type==='WA_TEST_PING'){respond({ok:true,ready:true});return;}
   if(msg?.type!=='SEND_TEST')return;
   if(sending){respond({ok:false,error:'פעולת שליחה כבר מתבצעת'});return;}
   if(!authorizedGroup(msg.group) || typeof msg.text!=='string' || !msg.text.trim()){respond({ok:false,error:'יעד או תוכן לא מורשים'});return;}
