@@ -24,8 +24,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse)=>{
   if(pair[GROUP_LOCK]&&pair[GROUP_LOCK]!==job.group)throw Error('נחסמה שליחה ליעד שונה מקבוצת הבדיקות שהוגדרה לראשונה');
   if(typeof job.text!=='string'||!job.text.trim()||job.text.length>4000) throw Error('בדיקה זו תומכת רק בהודעת טקסט עד 4,000 תווים');
   if(job.filename) throw Error('שליחת קבצים עדיין אינה נתמכת בתוסף הניסוי');
-  if(!Number.isFinite(job.when) || job.when<Date.now()+1000 || job.when>Date.now()+30*86400000)throw Error('יש לבחור מועד עתידי בתוך 30 ימים');
-  const item={id:crypto.randomUUID(),group:job.group,text:job.text,when:job.when,phase:'scheduled'};
+  if(!Number.isFinite(job.when) || job.when<Date.now()-15000 || job.when>Date.now()+30*86400000)throw Error('מועד התזמון אינו בטווח המותר');
+  const item={id:crypto.randomUUID(),group:job.group,text:job.text,when:Math.max(job.when,Date.now()+250),phase:'scheduled'};
   await chrome.storage.local.set({[GROUP_LOCK]:job.group});
   await chrome.storage.local.set({[JOB]:item});await setAlarm(item);await status('scheduled',new Date(item.when).toLocaleString('he-IL'));
   scheduleNearTerm(item);
