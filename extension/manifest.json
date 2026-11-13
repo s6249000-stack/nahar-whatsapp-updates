@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "נהר שלום - תזמון וואטסאפ (בדיקות)",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "תזמון הודעת ניסיון אחת לקבוצה פנימית באמצעות WhatsApp Web",
   "permissions": ["alarms","storage","tabs","scripting","notifications"],
   "host_permissions": ["https://web.whatsapp.com/*"],
