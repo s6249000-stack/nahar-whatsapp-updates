@@ -77,6 +77,6 @@ async function sendDueJob(expectedId){
   if(!result)throw Error('WhatsApp Web לא החזיר תשובה מניסיון השליחה');
   if(!result.ok)throw Error(result.error||'השליחה לא אושרה');
   job.phase='attempted';await chrome.storage.local.set({[JOB]:job});await status('attempted','ניסיון שליחה בוצע; יש לבדוק בקבוצה שההודעה נראית');
-  chrome.notifications.create({type:'basic',iconUrl:'icon.png',title:'נהר שלום — בדיקת תזמון',message:'ניסיון השליחה בוצע. ודא שההודעה הופיעה בקבוצה.'});
- }catch(e){await status('failed',String(e.message||e));const r=await chrome.storage.local.get(JOB);if(r[JOB]){r[JOB].phase='failed';r[JOB].error=String(e.message||e);await chrome.storage.local.set({[JOB]:r[JOB]});}chrome.notifications.create({type:'basic',iconUrl:'icon.png',title:'נהר שלום — שליחת ניסיון נכשלה',message:String(e.message||e).slice(0,230)});}finally{ongoing=false}
+  /* Delivery status is reported via STATUS_TEST */
+ }catch(e){await status('failed',String(e.message||e));const r=await chrome.storage.local.get(JOB);if(r[JOB]){r[JOB].phase='failed';r[JOB].error=String(e.message||e);await chrome.storage.local.set({[JOB]:r[JOB]});}/* Delivery status is reported via STATUS_TEST */}finally{ongoing=false}
 }
