@@ -90,6 +90,10 @@
   }
   throw Error('נמצאה קבוצת הבדיקות ברשימה אך לא אומתה פתיחת השיחה. שמות בכותרת: '+headerNames().map(cleanName).filter(Boolean).slice(0,5).join(' / ').slice(0,180)+'. '+diagnosis());
  }
+ function metrics(){
+  return {hasMain:!!main(),hasHeader:!!document.querySelector('#main header'),headerFields:Math.min(100,headerNames().length),
+   hasSide:!!side(),hasSearch:!!mainSearch(),hasEditor:!!editor()};
+ }
  async function send(text,group){
    if(typeof group!=='string'||group.length<3||group.length>160||!text?.trim())throw Error('שם קבוצה או הודעה לא תקינים');
    if(!document.querySelector('#side'))throw Error('WhatsApp Web עדיין לא נטען או מנותק. '+diagnosis());
@@ -113,7 +117,7 @@
    if(sending){respond({ok:false,error:'ניסיון שליחה כבר מתבצע'});return;}
    if(typeof msg.group!=='string'||typeof msg.text!=='string'){respond({ok:false,error:'נתוני הבדיקה לא תקינים'});return;}
    sending=true;
-   send(msg.text,msg.group).then(respond).catch(e=>respond({ok:false,error:String(e.message||e)})).finally(()=>{sending=false});
+   send(msg.text,msg.group).then(respond).catch(e=>respond({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false});
    return true;
  });
 })();
