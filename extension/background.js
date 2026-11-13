@@ -4,7 +4,35 @@ const JOB='testJob';
 const ALARM='nahar-test-send';
 let ongoing=false;
 let nearTermTimer=null;
-async function status(phase, detail='') {await chrome.storage.local.set({lastStatus:{phase,detail,at:new Date().toISOString()}});}
+function classify(phase,detail){
+ const d=String(detail||'');
+ if(phase==='attempted'||phase==='scheduled'||phase==='processing')return {stage:phase==='scheduled'?'schedule':phase==='processing'?'alarm':'send',code:'OK'};
+ if(/לשונית WhatsApp|לא נמצאה לשונית/.test(d))return {stage:'tab',code:'NO_TAB'};
+ if(/רכיב WhatsApp|חיבור התוסף|לא החזיר תשובה|לא נטען לאחר/.test(d))return {stage:'probe',code:'NO_BRIDGE'};
+ if(/אזור שיחה חסר/.test(d))return {stage:'chat',code:'NO_MAIN'};
+ if(/חיפוש|שדה החיפוש/.test(d))return {stage:'search',code:'NO_SEARCH'};
+ if(/תוצאה מדויקת|לא נמצאה|לא נמצא.*קבוצת/.test(d))return {stage:'search',code:'NO_RESULT'};
+ if(/כמה שיחות|כמה תוצאות/.test(d))return {stage:'search',code:'MULTIPLE_RESULTS'};
+ if(/לא אומתה|לא נפתחה|השתנתה|קבוצה.*לא/.test(d))return {stage:'verify',code:'GROUP_MISMATCH'};
+ if(/כתיבה|שדה כתיבת/.test(d))return {stage:'compose',code:'NO_EDITOR'};
+ if(/טיוטה|טקסט.*קיים/.test(d))return {stage:'compose',code:'DRAFT_EXISTS'};
+ if(/טקסט|נוסח/.test(d))return {stage:'compose',code:'TEXT_MISMATCH'};
+ if(/כפתור שליחה/.test(d))return {stage:'send',code:'SEND_BUTTON_MISSING'};
+ if(/מועד|תזמון/.test(d))return {stage:'schedule',code:'REJECTED'};
+ return {stage:'unknown',code:'OTHER'};
+}
+async function status(phase, detail=''){
+ const r=await chrome.storage.local.get(JOB);
+ const attemptId=r[JOB]?.attemptId||'unknown';
+ const info=classify(phase,detail);
+ const event={phase,detail,at:new Date().toISOString(),stage:info.stage,code:info.code,version:chrome.runtime.getManifest().version,attemptId};
+ await chrome.storage.local.set({lastStatus:event});
+ // Status is pushed to the already-open, protected scheduler page. It uploads only whitelisted diagnostics.
+ try{
+  const tabs=await chrome.tabs.query({url:'https://nahar-shalom-tools.pages.dev/tools/whatsapp-scheduler/*'});
+  await Promise.all(tabs.map(t=>chrome.tabs.sendMessage(t.id,{type:'NAHAR_WA_DIAGNOSTIC_PUSH',status:event}).catch(()=>{})));
+ }catch{}
+}
 async function setAlarm(job) {await chrome.alarms.clear(ALARM);await chrome.alarms.create(ALARM,{when:job.when});}
 async function activateWhatsappTab(){
  const tabs=await chrome.tabs.query({url:'https://web.whatsapp.com/*'});
@@ -50,7 +78,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse)=>{
   if(typeof job.text!=='string'||!job.text.trim()||job.text.length>4000) throw Error('בדיקה זו תומכת רק בהודעת טקסט עד 4,000 תווים');
   if(job.filename) throw Error('שליחת קבצים עדיין אינה נתמכת בתוסף הניסוי');
   if(!Number.isFinite(job.when) || job.when<Date.now()-15000 || job.when>Date.now()+30*86400000)throw Error('מועד התזמון אינו בטווח המותר');
-  const item={id:crypto.randomUUID(),group:job.group,text:job.text,when:Math.max(job.when,Date.now()+250),phase:'scheduled'};
+  const item={id:crypto.randomUUID(),attemptId:typeof job.attemptId==='string'&&/^[a-zA-Z0-9-]{8,40}$/.test(job.attemptId)?job.attemptId:crypto.randomUUID(),group:job.group,text:job.text,when:Math.max(job.when,Date.now()+250),phase:'scheduled'};
   await chrome.storage.local.set({[GROUP_LOCK]:job.group});
   await chrome.storage.local.set({[JOB]:item});await setAlarm(item);await status('scheduled',new Date(item.when).toLocaleString('he-IL'));
   scheduleNearTerm(item);
