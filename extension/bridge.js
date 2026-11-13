@@ -3,6 +3,12 @@
   if (window.top !== window) return;
   const source = 'nahar-wa-scheduler-v1';
   window.postMessage({source, direction:'extension-to-page', type:'READY'}, location.origin);
+  chrome.runtime.onMessage.addListener((message, sender, respond) => {
+    if (message?.type !== 'NAHAR_WA_DIAGNOSTIC_PUSH') return;
+    const info=message.status||{};
+    window.postMessage({source,direction:'extension-to-page',type:'STATUS_PUSH',status:info},location.origin);
+    respond({ok:true});
+  });
   window.addEventListener('message', async e => {
     if (e.source !== window || e.origin !== location.origin || e.data?.source !== source || e.data.direction !== 'page-to-extension') return;
     if (!['SCHEDULE','STATUS'].includes(e.data.type)) return;
