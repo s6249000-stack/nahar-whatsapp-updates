@@ -59,6 +59,12 @@
  }
  async function ensureGroup(group){
   if(activeIs(group))return;
+  // Pinned chats are searched by name before typing into the sidebar search.
+  const pinned=resultRowsForName(group);
+  if(pinned.length===1){
+   pinned[0].click();
+   for(let i=0;i<22;i++){await delay(150);if(activeIs(group)&&editor())return;}
+  }
   let search=null;
   for(let i=0;i<30;i++){search=mainSearch();if(search)break;await delay(150);}
   if(!search)throw Error('לא נמצא שדה החיפוש הראשי. '+diagnosis());
@@ -82,7 +88,7 @@
    await delay(170);
    if(activeIs(group)&&editor())return;
   }
-  throw Error('נמצאה קבוצת הבדיקות ברשימה אך לא אומתה פתיחת השיחה. '+diagnosis());
+  throw Error('נמצאה קבוצת הבדיקות ברשימה אך לא אומתה פתיחת השיחה. שמות בכותרת: '+headerNames().map(cleanName).filter(Boolean).slice(0,5).join(' / ').slice(0,180)+'. '+diagnosis());
  }
  async function send(text,group){
    if(typeof group!=='string'||group.length<3||group.length>160||!text?.trim())throw Error('שם קבוצה או הודעה לא תקינים');
