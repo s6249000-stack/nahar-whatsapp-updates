@@ -63,8 +63,13 @@
      for(let i=0;i<20&&!row;i++){await delay(350);row=sidebarMatch(group);}
      if(!row)throw Error('קבוצת הבדיקות לא נמצאה לאחר חיפוש. '+diagnosis());
    }
-   row.click();
-   for(let i=0;i<22&&!activeIs(group);i++)await delay(350);
+   // Click the actual chat title or its clickable parent, not an arbitrary virtual-list cell.
+   const titleNode=[...row.querySelectorAll('[title],[aria-label],[dir="auto"]')].find(e=>
+     norm(e.getAttribute('title'))===norm(group)||norm(e.getAttribute('aria-label'))===norm(group)||(e.children.length===0&&norm(e.textContent)===norm(group))
+   );
+   const clickTarget=titleNode?.closest('[role="button"],[tabindex="0"]')||titleNode||row;
+   clickTarget.click();
+   for(let i=0;i<28&&!activeIs(group);i++)await delay(300);
    if(!activeIs(group))throw Error('נפתחה שיחה אך אי אפשר לאמת את קבוצת הבדיקות. '+diagnosis());
  }
  async function send(text,group){
@@ -85,7 +90,7 @@
    return {ok:true,detail:'נלחץ כפתור שליחה; יש לאמת שההודעה הופיעה בקבוצה'};
  }
  chrome.runtime.onMessage.addListener((msg,sender,respond)=>{
-   if(msg?.type==='WA_TEST_PING'){respond({ok:true,ready:true,hasMain:!!main(),active:!!editor()});return;}
+   if(msg?.type==='WA_TEST_PING'){respond({ok:true,ready:true,hasMain:!!main(),hasSide:!!document.querySelector('#pane-side'),active:!!editor()});return;}
    if(msg?.type!=='SEND_TEST')return;
    if(sending){respond({ok:false,error:'ניסיון שליחה כבר מתבצע'});return;}
    if(typeof msg.group!=='string'||typeof msg.text!=='string'){respond({ok:false,error:'נתוני הבדיקה לא תקינים'});return;}
