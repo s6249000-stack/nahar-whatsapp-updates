@@ -21,11 +21,15 @@ function classify(phase,detail){
  if(/מועד|תזמון/.test(d))return {stage:'schedule',code:'REJECTED'};
  return {stage:'unknown',code:'OTHER'};
 }
-async function status(phase, detail=''){
+function safeMetrics(m){
+ if(!m||typeof m!=='object')return {};
+ return {hasMain:m.hasMain===true,hasHeader:m.hasHeader===true,hasSide:m.hasSide===true,hasSearch:m.hasSearch===true,hasEditor:m.hasEditor===true,headerFields:Math.min(100,Math.max(0,Math.floor(Number(m.headerFields)||0)))};
+}
+async function status(phase, detail='',metrics={}){
  const r=await chrome.storage.local.get(JOB);
  const attemptId=r[JOB]?.attemptId||'unknown';
  const info=classify(phase,detail);
- const event={phase,detail,at:new Date().toISOString(),stage:info.stage,code:info.code,version:chrome.runtime.getManifest().version,attemptId};
+ const event={phase,detail,at:new Date().toISOString(),stage:info.stage,code:info.code,version:chrome.runtime.getManifest().version,attemptId,metrics:safeMetrics(metrics)};
  await chrome.storage.local.set({lastStatus:event});
  // Status is pushed to the already-open, protected scheduler page. It uploads only whitelisted diagnostics.
  try{
@@ -115,8 +119,8 @@ async function sendDueJob(expectedId){
   try{result=await chrome.tabs.sendMessage(tab.id,{type:'SEND_TEST_V030',group:job.group,text:job.text,id:job.id});}
   catch(error){throw Error('חיבור התוסף ללשונית אבד בזמן השליחה: '+String(error?.message||error).slice(0,180));}
   if(!result)throw Error('WhatsApp Web לא החזיר תשובה מניסיון השליחה');
-  if(!result.ok)throw Error(result.error||'השליחה לא אושרה');
+  if(!result.ok){const err=new Error(result.error||'השליחה לא אושרה');err.metrics=result.metrics;throw err;}
   job.phase='attempted';await chrome.storage.local.set({[JOB]:job});await status('attempted','ניסיון שליחה בוצע; יש לבדוק בקבוצה שההודעה נראית');
   /* Delivery status is reported via STATUS_TEST */
- }catch(e){await status('failed',String(e.message||e));const r=await chrome.storage.local.get(JOB);if(r[JOB]){r[JOB].phase='failed';r[JOB].error=String(e.message||e);await chrome.storage.local.set({[JOB]:r[JOB]});}/* Delivery status is reported via STATUS_TEST */}finally{ongoing=false}
+ }catch(e){await status('failed',String(e.message||e),e.metrics||{});const r=await chrome.storage.local.get(JOB);if(r[JOB]){r[JOB].phase='failed';r[JOB].error=String(e.message||e);await chrome.storage.local.set({[JOB]:r[JOB]});}/* Delivery status is reported via STATUS_TEST */}finally{ongoing=false}
 }
