@@ -11,12 +11,23 @@
  }
  function compose(){return [...document.querySelectorAll('[contenteditable="true"][role="textbox"],footer [contenteditable="true"]')].find(visible);}
  function selectedTitle(group){
-  const header=document.querySelector('#main header') || document.querySelector('header');if(!header)return '';
+  const main=document.querySelector('#main');
+  if(!main)return '';
   const expected=normalized(group);
-  const names=[...header.querySelectorAll('[title]')].map(e=>e.getAttribute('title'))
-    .concat([...header.querySelectorAll('[dir="auto"]')].map(e=>e.textContent))
-    .filter(Boolean).map(normalized);
-  return names.find(t=>t===expected)||'';
+  const candidates=[
+    ...main.querySelectorAll('header [title],header [aria-label],header [dir="auto"],[data-testid="conversation-header"] [title],[data-testid="conversation-header"] [dir="auto"]')
+  ];
+  const names=[];
+  for(const el of candidates){
+    if(!visible(el))continue;
+    names.push(el.getAttribute('title'),el.getAttribute('aria-label'),el.textContent);
+  }
+  const header=main.querySelector('header')||main.querySelector('[data-testid="conversation-header"]');
+  if(header){
+    const full=normalized(header.textContent);
+    if(full===expected || full.startsWith(expected+' ') || full.startsWith(expected+'\\n'))return expected;
+  }
+  return names.filter(Boolean).map(normalized).find(name=>name===expected)||'';
  }
  async function send(text,groupName){
   if(!authorizedGroup(groupName))throw Error('שם יעד לא תקין');
@@ -29,8 +40,10 @@
    for(let i=0;i<16&&!group;i++){await sleep(500);group=exactGroup(groupName)}
    if(!group)throw Error('לא נמצאה התאמה מדויקת לשם קבוצת הבדיקות');
   }
-  group.click();for(let i=0;i<16&&!selectedTitle(groupName);i++)await sleep(350);
-  if(!selectedTitle(groupName))throw Error('שם הקבוצה הפתוחה אינו תואם לקבוצת הבדיקות — השליחה בוטלה');
+  const row=group.closest('[data-testid="cell-frame-container"],[role="row"]')||group;
+  row.click();
+  for(let i=0;i<24&&!selectedTitle(groupName);i++)await sleep(350);
+  if(!selectedTitle(groupName))throw Error('לא ניתן לאמת בוודאות את שם הקבוצה הפתוחה — השליחה בוטלה מטעמי בטיחות');
   const box=compose();if(!box)throw Error('שדה כתיבת הודעה לא נמצא');
   if(normalized(box.innerText))throw Error('קיימת הודעה שלא נשלחה בשדה הכתיבה — בוטל כדי לא לדרוס אותה');
   box.focus();
