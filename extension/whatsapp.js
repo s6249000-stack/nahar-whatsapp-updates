@@ -6,102 +6,85 @@
  const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
  const norm=s=>String(s||'').normalize('NFC').replace(/[\u200e\u200f\u061c\u202a-\u202e\u2066-\u2069]/g,'').replace(/\s+/g,' ').trim();
  const visible=e=>Boolean(e&&e.getClientRects().length);
- const main=()=>document.querySelector('#main')||document.querySelector('[data-testid="conversation-panel-wrapper"]')||document.querySelector('[role="main"]');
- function conversationHeader(){
-   const m=main();
-   if(m){
-     const h=m.querySelector('header,[data-testid="conversation-header"],[data-testid="conversation-info-header"]');
-     if(h&&visible(h))return h;
-   }
-   const candidates=[...document.querySelectorAll('header,[data-testid="conversation-header"]')].filter(visible);
-   return candidates.find(h=>h.closest('#main,[role="main"],[data-testid="conversation-panel-wrapper"]'))||null;
+ const main=()=>document.querySelector('#main');
+ const attrs=(e,a)=>e?.getAttribute(a)||'';
+ const isShown=e=>!!(e&&e.isConnected&&e.getClientRects().length&&getComputedStyle(e).visibility!=='hidden');
+ const side=()=>document.querySelector('#side');
+ const cleanName=s=>norm(s).replace(/[\u200b\u2060]/g,'');
+ function headerNames(){
+  const h=document.querySelector('#main header');
+  if(!isShown(h))return [];
+  return [...h.querySelectorAll('[title],span,[aria-label]')].filter(isShown)
+   .flatMap(e=>[attrs(e,'title'),attrs(e,'aria-label'),e.children.length?'':e.textContent?.trim()]).filter(Boolean);
  }
- function activeNames() {
-   const h=conversationHeader();
-   if(!h)return [];
-   const values=[];
-   for(const e of [h,...h.querySelectorAll('[title],[aria-label],[dir="auto"],[data-testid]')]){
-     if(!visible(e))continue;
-     values.push(e.getAttribute('title'),e.getAttribute('aria-label'));
-     if(e.children.length===0)values.push(e.textContent);
-   }
-   return [...new Set(values.map(norm).filter(Boolean))];
- }
- function activeIs(group){return activeNames().includes(norm(group));}
+ const activeIs=name=>headerNames().some(v=>cleanName(v)===cleanName(name));
+ function editor(){return [...document.querySelectorAll('#main footer [contenteditable="true"],#main [data-testid="conversation-compose-box-input"]')].find(isShown)||null;}
  function diagnosis(){
-   return 'אבחון: אזור שיחה '+(main()?'קיים':'חסר')+
-    ', כותרת '+(conversationHeader()?'קיימת':'חסרה')+
-    ', שדות כותרת '+activeNames().length+
-    ', רשימת שיחות '+(document.querySelector('#pane-side')?'קיימת':'חסרה')+
-    ', שדה כתיבה '+(editor()?'קיים':'חסר');
+  const mainEl=main(),sideEl=side(),search=mainSearch(),rows=sideEl?.querySelectorAll('[role="row"],[data-testid="cell-frame-container"]').length||0;
+  return 'אבחון: אזור שיחה '+(mainEl?'קיים':'חסר')+', כותרת '+(document.querySelector('#main header')?'קיימת':'חסרה')+
+    ', שדות כותרת '+headerNames().length+', רשימת שיחות '+(sideEl?'קיימת':'חסרה')+
+    ', שדה חיפוש '+(search?'קיים':'חסר')+', שורות '+rows+', שדה כתיבה '+(editor()?'קיים':'חסר');
  }
- function sidebarMatch(group){
-   const pane=document.querySelector('#pane-side')||document.querySelector('[data-testid="chat-list"]');
-   if(!pane)return null;
-   const desired=norm(group);
-   const candidates=[...pane.querySelectorAll('[title],[aria-label],[dir="auto"]')].filter(visible);
-   const e=candidates.find(e=>norm(e.getAttribute('title'))===desired||norm(e.getAttribute('aria-label'))===desired||(e.children.length===0&&norm(e.textContent)===desired));
-   return e?e.closest('[data-testid="cell-frame-container"],[role="row"],[data-testid="chat-list-item"]')||e:null;
+ function mainSearch(){
+  const root=side();if(!isShown(root))return null;
+  const items=[...root.querySelectorAll('input,[contenteditable="true"],[role="textbox"]')].filter(isShown);
+  const label=e=>[attrs(e,'aria-label'),attrs(e,'title'),attrs(e,'placeholder'),attrs(e,'data-placeholder'),attrs(e.parentElement,'data-placeholder')].join(' ');
+  return items.find(e=>/search|חיפוש|חפש/i.test(label(e)))||items.find(e=>!e.closest('[role="dialog"]'))||null;
  }
- function searchBox(){
-   const pane=document.querySelector('#side')||document.querySelector('[data-testid="chat-list-search"]')||document.body;
-   return [...pane.querySelectorAll('[contenteditable="true"][role="textbox"],[contenteditable="true"][data-tab]')].find(e=>visible(e)&&!e.closest('footer'))||null;
+ const searchContent=e=>e instanceof HTMLInputElement?e.value:(e.innerText||e.textContent||'').trim();
+ function setSearch(e,value){
+  e.focus();
+  if(e instanceof HTMLInputElement){
+   const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
+   if(!setter)throw Error('שדה החיפוש אינו מאפשר כתיבה');
+   setter.call(e,value);
+   e.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));
+  }else{
+   const selection=document.getSelection(),range=document.createRange();
+   range.selectNodeContents(e);selection.removeAllRanges();selection.addRange(range);
+   if(!document.execCommand('insertText',false,value))throw Error('WhatsApp Web לא קיבל טקסט בחיפוש');
+   e.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));
+  }
  }
- function editor(){
-   const m=main();if(!m)return null;
-   return [...m.querySelectorAll('footer [contenteditable="true"],[data-testid="conversation-compose-box-input"],[contenteditable="true"][role="textbox"]')].find(visible)||null;
- }
- function clickAsUser(element,direct=false){
-   if(!element)return false;
-   try{element.scrollIntoView({block:'center',inline:'nearest'});}catch{}
-   const target=direct?element:(element.closest('[role="listitem"],[data-testid="cell-frame-container"],[role="row"]')||element);
-   const rect=target.getBoundingClientRect();
-   const x=rect.left+Math.max(4,Math.min(rect.width/2,rect.width-4)),y=rect.top+Math.max(4,Math.min(rect.height/2,rect.height-4));
-   const common={bubbles:true,cancelable:true,composed:true,clientX:x,clientY:y,button:0,buttons:1,view:window};
-   target.dispatchEvent(new PointerEvent('pointerover',{...common,pointerId:1,pointerType:'mouse',isPrimary:true}));
-   target.dispatchEvent(new MouseEvent('mouseover',common));
-   target.dispatchEvent(new PointerEvent('pointerdown',{...common,pointerId:1,pointerType:'mouse',isPrimary:true}));
-   target.dispatchEvent(new MouseEvent('mousedown',common));
-   target.dispatchEvent(new PointerEvent('pointerup',{...common,buttons:0,pointerId:1,pointerType:'mouse',isPrimary:true}));
-   target.dispatchEvent(new MouseEvent('mouseup',{...common,buttons:0}));
-   target.dispatchEvent(new MouseEvent('click',{...common,buttons:0}));
-   return true;
- }
- function rowSummary(el){
-   if(!el)return 'ללא שורה';
-   const e=el.closest('[role="listitem"],[data-testid="cell-frame-container"],[role="row"]')||el;
-   return 'תגית '+e.tagName+'; תפקיד '+(e.getAttribute('role')||'-')+'; testid '+(e.getAttribute('data-testid')||'-')+'; גודל '+Math.round(e.getBoundingClientRect().width)+'x'+Math.round(e.getBoundingClientRect().height);
+ function resultRowsForName(name){
+  const root=side();if(!isShown(root))return [];
+  const wanted=cleanName(name);
+  const rows=[...root.querySelectorAll('[data-testid="cell-frame-container"],[data-testid="cell-frame-wrapper"],[role="row"],[role="listitem"],[data-testid="chat-list"] [tabindex],[data-testid="search-result"]')]
+    .filter(isShown).filter(e=>!e.closest('#main'));
+  const matches=rows.filter(row=>[...row.querySelectorAll('[title],span[dir="auto"],span[title]')]
+    .some(e=>isShown(e)&&cleanName(attrs(e,'title')||(e.children.length?'':e.textContent))===wanted));
+  return matches.filter(row=>!matches.some(child=>child!==row&&row.contains(child)));
  }
  async function ensureGroup(group){
-   if(activeIs(group))return;
-   let row=sidebarMatch(group);
-   if(!row){
-     const search=searchBox();
-     if(!search)throw Error('לא נמצא חיפוש שיחות. '+diagnosis());
-     search.focus();
-     if(norm(search.innerText))throw Error('חיפוש השיחות אינו ריק — לא נדרוס תוכן. '+diagnosis());
-     if(!document.execCommand('insertText',false,group))throw Error('לא ניתן להקליד בחיפוש. '+diagnosis());
-     for(let i=0;i<20&&!row;i++){await delay(350);row=sidebarMatch(group);}
-     if(!row)throw Error('קבוצת הבדיקות לא נמצאה לאחר חיפוש. '+diagnosis());
-   }
-   // Click the actual chat title or its clickable parent, not an arbitrary virtual-list cell.
-   const titleNode=[...row.querySelectorAll('[title],[aria-label],[dir="auto"]')].find(e=>
-     norm(e.getAttribute('title'))===norm(group)||norm(e.getAttribute('aria-label'))===norm(group)||(e.children.length===0&&norm(e.textContent)===norm(group))
-   );
-   const clickTarget=titleNode?.closest('[role="listitem"],[data-testid="cell-frame-container"],[role="row"],[role="button"],[tabindex="0"]')||row;
-   // Attempt a full pointer/mouse sequence on the actual chat row; bare .click() was not opening the React chat.
-   clickAsUser(clickTarget);
-   for(let i=0;i<16&&!activeIs(group);i++)await delay(250);
-   if(!activeIs(group)){
-     // A second, different interaction path: click the exact title node instead of the surrounding row.
-     if(titleNode&&titleNode!==clickTarget)clickAsUser(titleNode,true);
-     for(let i=0;i<12&&!activeIs(group);i++)await delay(250);
-   }
-   if(!activeIs(group))throw Error('בוצעו אירועי עכבר בשיחת הבדיקות אך לא נפתח אזור שיחה. '+rowSummary(clickTarget)+'. '+diagnosis());
+  if(activeIs(group))return;
+  let search=null;
+  for(let i=0;i<30;i++){search=mainSearch();if(search)break;await delay(150);}
+  if(!search)throw Error('לא נמצא שדה החיפוש הראשי. '+diagnosis());
+  const current=cleanName(searchContent(search));
+  if(current&&current!==cleanName(group))throw Error('קיים חיפוש אחר בוואטסאפ. לא דרסתי אותו. '+diagnosis());
+  setSearch(search,group);
+  await delay(350);
+  if(cleanName(searchContent(search))!==cleanName(group))throw Error('שם קבוצת הבדיקות לא נקלט בחיפוש. '+diagnosis());
+  let picked=null;
+  for(let i=0;i<30;i++){
+   const rows=resultRowsForName(group);
+   if(rows.length===1){picked=rows[0];break;}
+   if(rows.length>1)throw Error('נמצאו כמה תוצאות זהות לשם קבוצת הבדיקות — השליחה בוטלה');
+   await delay(180);
+  }
+  if(!picked)throw Error('קבוצת הבדיקות לא נמצאה כתוצאה מדויקת. '+diagnosis());
+  const old=headerNames().join('|');
+  picked.click();
+  for(let i=0;i<30;i++){
+   await delay(170);
+   if(activeIs(group)&&editor()&&headerNames().join('|')!==old)return;
+   if(activeIs(group)&&editor())return;
+  }
+  throw Error('לא נפתחה קבוצת הבדיקות לאחר הלחיצה. '+diagnosis());
  }
  async function send(text,group){
    if(typeof group!=='string'||group.length<3||group.length>160||!text?.trim())throw Error('שם קבוצה או הודעה לא תקינים');
-   if(!document.querySelector('#side')&&!document.querySelector('#pane-side'))throw Error('WhatsApp Web עדיין לא נטען או מנותק. '+diagnosis());
+   if(!document.querySelector('#side'))throw Error('WhatsApp Web עדיין לא נטען או מנותק. '+diagnosis());
    await ensureGroup(group);
    if(!activeIs(group))throw Error('קבוצת הבדיקות לא אומתה — בוטל');
    const box=editor();if(!box)throw Error('לא נמצא שדה כתיבת ההודעה בקבוצת הבדיקות');
