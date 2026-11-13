@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "נהר שלום - תזמון וואטסאפ (בדיקות)",
+  "version": "0.2.0",
+  "description": "תזמון הודעת ניסיון אחת לקבוצה פנימית באמצעות WhatsApp Web",
+  "permissions": ["alarms","storage","tabs","notifications"],
+  "host_permissions": ["https://web.whatsapp.com/*"],
+  "content_scripts": [
+    {"matches":["https://nahar-shalom-tools.pages.dev/tools/whatsapp-scheduler/*"],"js":["bridge.js"],"run_at":"document_idle"},
+    {"matches":["https://web.whatsapp.com/*"],"js":["whatsapp.js"],"run_at":"document_idle"}
+  ],
+  "background":{"service_worker":"background.js"},
+  "action":{"default_title":"נהר שלום - תזמון בדיקות"}
+}
