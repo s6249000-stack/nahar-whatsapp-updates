@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV037)return;
-globalThis.__naharSchedulerAgentV037=true;
+if(globalThis.__naharSchedulerAgentV038)return;
+globalThis.__naharSchedulerAgentV038=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -216,12 +216,77 @@ async function decodeAttachment(a){
 function attachButton(){
  const main=document.querySelector('#main');
  if(!main)return null;
- const selectors=['footer button[aria-label*="Attach" i]','footer button[aria-label*="צרף"]','footer button[aria-label*="הוסף"]','footer [data-testid="clip"]','footer [data-icon="clip"]','footer [data-icon="plus-rounded"]','footer [data-icon="plus"]'];
- for(const selector of selectors)for(const e of main.querySelectorAll(selector)){
-  const b=e.closest('button,[role="button"]')||e;
-  if(shown(b)&&b.closest('footer'))return b;
+ const selectors=[
+  'footer button[aria-label*="Attach" i]','footer [role="button"][aria-label*="Attach" i]',
+  'footer button[aria-label*="צרף"]','footer [role="button"][aria-label*="צרף"]',
+  'footer button[aria-label*="הוסף"]','footer [role="button"][aria-label*="הוסף"]',
+  'footer [data-testid="clip"]','footer [data-icon="clip"]',
+  'footer [data-icon="plus-rounded"]','footer [data-icon="attach-menu-plus"]',
+  'footer button[title*="Attach" i]',
+  '[data-testid="compose-btn-attach"]','[data-testid="attach-menu-plus"]'
+ ];
+ for(const q of selectors)for(const el of main.querySelectorAll(q)){
+  const button=el.closest('button,[role="button"]')||el;
+  if(shown(button))return button;
+ }
+ // WhatsApp has moved the attachment button OUTSIDE footer in recent versions.
+ // Only look for attachment-specific icon names around the visible composer.
+ const c=composer(),rect=c?.getBoundingClientRect();
+ const closeToComposer=e=>{
+  if(!rect||!shown(e))return false;
+  const r=e.getBoundingClientRect();
+  return r.width>=15&&r.height>=15&&r.width<=90&&r.height<=90&&
+   Math.abs((r.top+r.bottom)/2-(rect.top+rect.bottom)/2)<100&&
+   r.left>rect.left-180&&r.right<rect.right+180;
+ };
+ const icons=[...main.querySelectorAll('[data-icon],button[aria-label],button[title],[role="button"][aria-label]')];
+ for(const el of icons){
+  const meta=[attr(el,'data-icon'),attr(el,'aria-label'),attr(el,'title')].join(' ');
+  if(!/(?:clip|attach|attachment|plus-rounded|attach-menu-plus|צרף|צירוף|הוסף)/i.test(meta))continue;
+  const btn=el.closest('button,[role="button"]')||el;
+  if(closeToComposer(btn))return btn;
  }
  return null;
+}
+function filePickerDiagnostic(){
+ const main=document.querySelector('#main');
+ const composerRect=composer()?.getBoundingClientRect();
+ const candidates=[...main?.querySelectorAll('button,[role="button"]')||[]]
+  .filter(shown).filter(e=>{
+   const r=e.getBoundingClientRect();
+   return composerRect&&Math.abs((r.top+r.bottom)/2-(composerRect.top+composerRect.bottom)/2)<95;
+  });
+ return 'כפתורי כתיבה סמוכים '+candidates.length+', כפתורי צירוף מזוהים '+[...main?.querySelectorAll('[data-icon*="clip"],[data-icon*="attach"],[data-icon*="plus"]')||[]].length;
+}
+async function injectFileByPasteDrop(file){
+ const compose=composer(),main=document.querySelector('#main');
+ if(!compose||!main)throw Error('שדה הכתיבה לא קיים');
+ const dt=new DataTransfer();dt.items.add(file);
+ compose.focus();
+ const targets=[compose,main];
+ const check=async(ms)=>{
+  for(let i=0;i<Math.ceil(ms/180);i++){if(previewSend()&&(previewRoot()||previewCaption()))return true;await wait(180);}
+  return false;
+ };
+ try{
+  let event;
+  try{event=new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:dt});}
+  catch{event=new Event('paste',{bubbles:true,cancelable:true});Object.defineProperty(event,'clipboardData',{value:dt})}
+  compose.dispatchEvent(event);
+  if(await check(3500))return true;
+ }catch{}
+ for(const target of targets){
+  try{
+   for(const type of ['dragenter','dragover','drop']){
+    let event;
+    try{event=new DragEvent(type,{bubbles:true,cancelable:true,dataTransfer:dt})}
+    catch{event=new Event(type,{bubbles:true,cancelable:true});Object.defineProperty(event,'dataTransfer',{value:dt})}
+    target.dispatchEvent(event);
+   }
+   if(await check(3500))return true;
+  }catch{}
+ }
+ return false;
 }
 const inputAccept=e=>String(e.getAttribute('accept')||'').toLowerCase().replace(/\s+/g,'');
 function isSticker(e){
@@ -300,10 +365,20 @@ function previewSend(){
 }
 async function sendAttachment(attachment,text,name){
  const file=await decodeAttachment(attachment);
- const input=await attachmentInput(file);
+ let input=null;
+ try{input=await attachmentInput(file);}
+ catch(error){
+  // Media paste/drop follows WhatsApp's own composer route; never switch to
+  // profile picture or sticker inputs.
+  if(/^(image|video)\//.test(file.type)&&await injectFileByPasteDrop(file)){
+   input=null;
+  }else throw Error(String(error.message||error)+'. '+filePickerDiagnostic());
+ }
+ if(input){
  const dt=new DataTransfer();dt.items.add(file);
  try{input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}))}
  catch{throw Error('WhatsApp לא קיבל את הקובץ המצורף')}
+ }
  let ready=false;
  for(let i=0;i<75;i++){
   await wait(200);
@@ -342,8 +417,8 @@ async function send(text,name,attachment){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V037'){reply({ok:true,version:'0.3.7',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V037')return;
+ if(msg?.type==='WA_TEST_PING_V038'){reply({ok:true,version:'0.3.8',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V038')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
  send(msg.text,msg.group,msg.attachment).then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
