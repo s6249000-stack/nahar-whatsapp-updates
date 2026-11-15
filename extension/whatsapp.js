@@ -118,15 +118,49 @@ async function openGroup(name){
  // Never use Enter on an unverified result: it could open the wrong conversation.
  throw Error('נמצאה רשימת שיחות, אך לא אומתה פתיחת קבוצת הבדיקות');
 }
+function messageCanonical(value){
+ return String(value||'')
+  .normalize('NFC')
+  .replace(/\r\n?/g,'\n')
+  .replace(/[\u200b-\u200f\u061c\u202a-\u202e\u2060\u2066-\u2069\ufeff]/g,'')
+  .replace(/[\ufe0e\ufe0f]/g,'')
+  .replace(/\u00a0/g,' ')
+  .replace(/[ \t]+/g,' ')
+  .replace(/[ \t]*\n[ \t]*/g,'\n')
+  .replace(/\n{2,}/g,'\n')
+  .trim();
+}
+function getComposerVariants(e){
+ const variants=[e.innerText||'',e.textContent||''];
+ // WhatsApp sometimes renders explicit BR elements without a newline in textContent.
+ let fromDom='';
+ const visit=node=>{
+  for(const child of node.childNodes){
+   if(child.nodeType===3){fromDom+=child.nodeValue||'';continue;}
+   if(child.nodeType!==1)continue;
+   if(child.tagName==='BR'){fromDom+='\n';continue;}
+   if(child.getAttribute('data-testid')==='mention-plain-text')continue;
+   const block=/^(DIV|P)$/.test(child.tagName);
+   if(block&&fromDom&&!fromDom.endsWith('\n'))fromDom+='\n';
+   visit(child);
+  }
+ };
+ visit(e);variants.push(fromDom);
+ return variants;
+}
 function fillComposer(e,text){
  e.focus();
- // Preserve explicit newlines using safe text-to-HTML encoding, as in the working collection agent.
- const html=String(text).replace(/\r\n?/g,'\n').split('\n').map(x=>x.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')).join('<br>');
+ const original=String(text).replace(/\r\n?/g,'\n');
+ const html=original.split('\n').map(line=>line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')).join('<br>');
  if(!document.execCommand('insertHTML',false,html))throw Error('הקלדת ההודעה נכשלה');
- const clean=s=>norm(s).replace(/\u00a0/g,' ');
- const actual=clean(e.innerText||'').replace(/\n+$/,'');
- const expected=clean(text).replace(/\n+$/,'');
- if(actual!==expected)throw Error('נוסח ההודעה אינו תואם למקור — לא נשלחה הודעה');
+ const expected=messageCanonical(original);
+ const values=getComposerVariants(e).map(messageCanonical);
+ if(!values.some(v=>v===expected)){
+  const actual=values[0]||'';
+  let mismatch=0;while(mismatch<Math.min(actual.length,expected.length)&&actual[mismatch]===expected[mismatch])mismatch++;
+  // Do not log message text or send an unverified draft.
+  throw Error('נוסח ההודעה אינו תואם למקור — לא נשלחה הודעה (אורך מקור '+expected.length+', אורך טיוטה '+actual.length+', מיקום הבדל '+mismatch+')');
+ }
 }
 function sendButton(){
  const m=document.querySelector('#main');if(!m)return null;
