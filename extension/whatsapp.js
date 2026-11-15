@@ -605,7 +605,7 @@ async function forwardLastTestMessage(source,target){
   const actions=[...main.querySelectorAll('button,[role="button"]')].filter(shown).filter(e=>{
    const info=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),e.textContent].join(' ').trim();
    const r=e.getBoundingClientRect(),b=main.getBoundingClientRect();
-   return /(?:^|\\s)(?:העבר|forward)(?:\\s|$)/i.test(info)&&r.top>b.bottom-115;
+   return /(?:^|\s)(?:העבר|forward)(?:\s|$)/i.test(info)&&r.top>b.bottom-115;
   });
   if(selected.length!==1||actions.length!==1)throw Error('נפתח מצב בחירת הודעות, אך לא אומתו בחירה יחידה וכפתור העברה');
   humanClick(actions[0]);
@@ -616,7 +616,7 @@ async function forwardLastTestMessage(source,target){
  if(search&&!readSearch(search).trim())setSearch(search,'פנימי שמעון נוה');
  for(let i=0;i<30;i++){
   const selection=forwardChoice(dialog,target);
-  if(selection){humanClick(selection);break}
+  if(selection){const selected=selection.matches('[aria-checked="true"],input:checked')||!!selection.querySelector('[aria-checked="true"],input:checked,[data-state="checked"]');if(!selected)humanClick(selection);break}
   await wait(170);
  }
  const chosen=forwardChoice(dialog,target);
