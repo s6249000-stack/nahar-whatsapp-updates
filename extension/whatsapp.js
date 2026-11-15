@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV0310)return;
-globalThis.__naharSchedulerAgentV0310=true;
+if(globalThis.__naharSchedulerAgentV0311)return;
+globalThis.__naharSchedulerAgentV0311=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -368,53 +368,53 @@ function previewCaption(){
  const labelled=candidates.filter(e=>/caption|כיתוב|הקלדת הודעה|type a message/i.test([attr(e,'aria-label'),attr(e,'data-placeholder'),attr(e,'title'),e.parentElement?.textContent?.slice(0,35)].join(' ')));
  return labelled.at(-1)||candidates.at(-1)||null;
 }
+function darkCircleCandidate(el,viewer){
+ if(!shown(el)||el.closest('#side'))return false;
+ const r=el.getBoundingClientRect();
+ if(r.width<43||r.width>90||r.height<43||r.height>90||Math.abs(r.width-r.height)>15)return false;
+ if(r.left<viewer.left-15||r.left>viewer.left+Math.min(160,viewer.width*.22))return false;
+ if(r.bottom<viewer.bottom-170||r.bottom>viewer.bottom+16)return false;
+ const c=getComputedStyle(el),rgb=(c.backgroundColor.match(/[\d.]+/g)||[]).map(Number);
+ const dark=rgb.length>=3&&(rgb.length<4||rgb[3]>.5)&&rgb[0]+rgb[1]+rgb[2]<240;
+ if(!dark||el.querySelector('img,video,canvas'))return false;
+ // Require the send-arrow symbol, not a random black circle.
+ const descendants=[...el.querySelectorAll('svg,[data-icon]')];
+ const hasArrow=descendants.some(x=>{
+  const icon=attr(x,'data-icon')+' '+attr(x,'aria-label');
+  if(/send|arrow|forward/i.test(icon))return true;
+  if(x.tagName.toLowerCase()==='svg'){
+   const view=attr(x,'viewBox'),path=x.querySelector('path,polygon,polyline');
+   return !!path&&!!view;
+  }
+  return false;
+ });
+ return hasArrow;
+}
 function previewSend(){
  const root=attachmentOverlay();
  if(!root||!visibleMediaStage(root))return null;
- const main=document.querySelector('#main');
- const viewer=(main||root).getBoundingClientRect();
- const minBottom=Math.max(viewer.top+viewer.height*.70,window.innerHeight*.69);
- const leftLimit=viewer.left+Math.min(205,viewer.width*.27);
- const candidates=[...document.querySelectorAll('button,[role="button"]')];
- const seen=new Set(),scored=[];
- for(const btn of candidates){
-  if(seen.has(btn)||!shown(btn)||btn.closest('#side'))continue;
-  seen.add(btn);
-  const r=btn.getBoundingClientRect();
-  if(r.width<32||r.width>108||r.height<32||r.height>108)continue;
-  // WhatsApp media-send is in the lower-left corner of the attachment editor.
-  if(r.left<viewer.left-25||r.left>leftLimit||r.bottom<minBottom||
-     r.top>window.innerHeight||r.bottom>window.innerHeight+14)continue;
-  const metadata=[
-   attr(btn,'aria-label'),attr(btn,'title'),attr(btn,'data-testid'),
-   ...[...btn.querySelectorAll('[data-icon],[data-testid],svg')].slice(0,10)
-     .flatMap(e=>[attr(e,'data-icon'),attr(e,'data-testid'),attr(e,'aria-label')])
-  ].join(' ');
-  const isSend=/send|שלח|שליחה|forward|arrow-(?:left|right)/i.test(metadata);
-  const isAdd=/attach|plus|add|צירוף|הוספ|הוסף|מדבקה|sticker/i.test(metadata)||
-     /^\s*[+＋]\s*$/.test(btn.textContent||'');
-  // The neighboring plus and thumbnail are not send controls.
-  if(isAdd||btn.querySelector('img,video'))continue;
-  const circular=Math.abs(r.width-r.height)<17&&r.width>=39;
-  const svg=!!btn.querySelector('svg,[data-icon]');
-  let dark=false;
-  for(let node=btn,depth=0;node&&depth<3;node=node.parentElement,depth++){
-   const bg=getComputedStyle(node).backgroundColor;
-   const nums=bg.match(/[\d.]+/g)?.map(Number)||[];
-   if(nums.length>=3&&(nums.length<4||nums[3]>.30)&&
-      (nums[0]+nums[1]+nums[2])<310){dark=true;break}
-  }
-  // An unlabeled button must match the screenshot-confirmed black circle.
-  if(!isSend&&!(circular&&svg&&dark))continue;
-  const score=(isSend?180:0)+(dark?75:0)+(circular?28:0)+(svg?12:0)
-    +Math.max(0,65-(r.left-viewer.left)*.5);
-  scored.push({btn,score,left:r.left});
+ const main=document.querySelector('#main'),viewer=(main||root).getBoundingClientRect();
+ // Prioritize named send controls, regardless of their DOM tag.
+ const exact=[...document.querySelectorAll('[aria-label],[title],[data-testid],[data-icon]')].filter(shown).filter(e=>{
+  const info=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),attr(e,'data-icon')].join(' ');
+  if(!/(?:send|שלח|שליחה|media-send)/i.test(info))return false;
+  const rect=e.getBoundingClientRect();
+  return rect.left>=viewer.left-20&&rect.left<viewer.left+Math.min(190,viewer.width*.25)&&
+   rect.bottom>viewer.bottom-175&&rect.bottom<viewer.bottom+20;
+ });
+ const getControl=e=>e.closest('button,[role="button"]')||e;
+ const named=[...new Set(exact.map(getControl))].filter(x=>shown(x)&&!x.closest('#side'));
+ if(named.length===1)return named[0];
+ // Current screenshot: a solid dark circle with a white arrow at the bottom left.
+ // This is sometimes a plain DIV, without button or role=button.
+ const candidates=[...main.querySelectorAll('button,div,[role="button"]')].filter(e=>darkCircleCandidate(e,viewer));
+ const unique=candidates.filter(e=>!candidates.some(other=>other!==e&&other.contains(e)));
+ if(unique.length===1)return unique[0];
+ if(unique.length>1){
+  const leftmost=[...unique].sort((a,b)=>a.getBoundingClientRect().left-b.getBoundingClientRect().left);
+  if(leftmost[1].getBoundingClientRect().left-leftmost[0].getBoundingClientRect().left>35)return leftmost[0];
  }
- scored.sort((x,y)=>y.score-x.score||x.left-y.left);
- if(!scored.length)return null;
- // No blind click on ambiguous controls: a unique top-scoring send is required.
- if(scored[1]&&scored[0].score-scored[1].score<14)return null;
- return scored[0].btn;
+ return null;
 }
 function previewDiagnostic(){
  const main=document.querySelector('#main');
@@ -456,7 +456,7 @@ async function sendAttachment(attachment,text,name){
  }
  if(!currentMatches(name))throw Error('קבוצת הבדיקות השתנתה לפני שליחת הקובץ — בוטל');
  const button=previewSend();
- if(!button)throw Error('כפתור שליחת הקובץ לא נמצא');
+ if(!button)throw Error('כפתור שליחת הקובץ לא נמצא. '+previewDiagnostic());
  // Send the file once, with its caption if supplied. Do not send a separate text message.
  button.click();
  return {ok:true};
@@ -479,8 +479,8 @@ async function send(text,name,attachment){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V0310'){reply({ok:true,version:'0.3.10',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V0310')return;
+ if(msg?.type==='WA_TEST_PING_V0311'){reply({ok:true,version:'0.3.11',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V0311')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
  send(msg.text,msg.group,msg.attachment).then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
