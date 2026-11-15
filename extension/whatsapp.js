@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV040)return;
-globalThis.__naharSchedulerAgentV040=true;
+if(globalThis.__naharSchedulerAgentV041)return;
+globalThis.__naharSchedulerAgentV041=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -503,12 +503,130 @@ async function send(text,name,attachment){
  b.click();
  return {ok:true};
 }
+
+const FORWARD_TEST_GROUP='🏷️ פנימי שמעון נוה 🔖';
+function forwardVisible(e){return shown(e)&&getComputedStyle(e).pointerEvents!=='none'}
+function outgoingRows(){
+ const main=document.querySelector('#main');
+ if(!main)return [];
+ const nodes=[...main.querySelectorAll('[data-id^="true_"],.message-out,[data-testid="msg-container"]')];
+ const results=[];
+ for(const node of nodes){
+  const root=node.closest('.message-out')||node;
+  if(!root.classList.contains('message-out')&&!String(root.getAttribute('data-id')||'').startsWith('true_')&&
+   !root.querySelector('[data-id^="true_"]'))continue;
+  if(root.closest('header,footer')||results.includes(root))continue;
+  results.push(root);
+ }
+ return results;
+}
+function lastOutgoing(){
+ const rows=outgoingRows();
+ return rows.at(-1)||null;
+}
+function expectedForwardMenu(){
+ const items=[...document.querySelectorAll('[role="menuitem"],[role="menu"] [role="button"],[data-testid*="menu-item"]')].filter(forwardVisible);
+ const options=items.filter(e=>{
+  const t=[attr(e,'aria-label'),attr(e,'title'),e.textContent].join(' ');
+  return /^(?:\s*)(?:↪\s*)?(?:Forward|העבר|העברה|העבר הודעה)(?:\s*)$/i.test(t.trim());
+ });
+ return options.length===1?options[0]:null;
+}
+async function openForwardFromMessage(row){
+ row.scrollIntoView({block:'center'});
+ await wait(200);
+ const clickable=[...row.querySelectorAll('[data-icon="forward"],[aria-label*="forward" i],[aria-label*="העבר"],[title*="forward" i],[title*="העבר"]')]
+  .map(e=>e.closest('button,[role="button"]')||e).filter(forwardVisible);
+ if(clickable.length===1){humanClick(clickable[0]);return}
+ const rect=row.getBoundingClientRect();
+ const ev={bubbles:true,cancelable:true,clientX:rect.left+rect.width*.5,clientY:rect.top+Math.min(55,rect.height*.35),button:2,buttons:2,view:window};
+ row.dispatchEvent(new PointerEvent('pointerdown',{...ev,pointerId:1,pointerType:'mouse'}));
+ row.dispatchEvent(new MouseEvent('mousedown',ev));
+ row.dispatchEvent(new MouseEvent('contextmenu',ev));
+ for(let i=0;i<15;i++){
+  const item=expectedForwardMenu();
+  if(item){humanClick(item);return}
+  await wait(170);
+ }
+ throw Error('תפריט העברת ההודעה לא נפתח או שאפשרות העברה לא זוהתה');
+}
+function forwardingDialog(){
+ const text=/העברת הודעה אל|העבר הודעה אל|Forward message to|Forward to|העבר אל/i;
+ const candidates=[...document.querySelectorAll('[role="dialog"],[data-testid*="forward"],[aria-modal="true"]')].filter(shown);
+ for(const el of candidates){
+  if(text.test((el.textContent||'').slice(0,400))||/forward/i.test(attr(el,'data-testid')))return el;
+ }
+ // WhatsApp sometimes mounts a non-dialog panel. Require a visible search
+ // and an explicit forwarding heading, rather than assuming any overlay.
+ const headers=[...document.querySelectorAll('h1,h2,[role="heading"]')].filter(shown).filter(e=>text.test(e.textContent||''));
+ for(const h of headers){
+  let e=h.parentElement;
+  for(let i=0;i<6&&e;i++,e=e.parentElement){
+   if(e.querySelector('[role="textbox"],input[type="text"],input[type="search"]'))return e;
+  }
+ }
+ return null;
+}
+function forwardChoice(dialog,target){
+ const wanted=lexical(target);
+ const els=[...dialog.querySelectorAll('[title],[aria-label],span[dir="auto"]')].filter(shown)
+  .filter(e=>lexical(attr(e,'title')||attr(e,'aria-label')||(e.children.length?'':e.textContent))===wanted);
+ const rows=[...new Set(els.map(e=>e.closest('[role="row"],[role="checkbox"],[data-testid*="cell"],[tabindex]')||e))];
+ return rows.length===1?rows[0]:null;
+}
+function forwardConfirm(dialog){
+ const elems=[...dialog.querySelectorAll('button,[role="button"],[aria-label],[data-icon]')].filter(shown);
+ const options=[...new Set(elems.map(e=>e.closest('button,[role="button"]')||e))].filter(e=>{
+  const txt=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),...([...e.querySelectorAll('[data-icon]')].map(x=>attr(x,'data-icon'))),e.textContent].join(' ');
+  return /^(?:\s*)(?:Forward|העבר|שלח|Send)(?:\s*)$/i.test(txt.trim())||
+   /\b(?:forward|send)\b/i.test([attr(e,'aria-label'),attr(e,'data-testid')].join(' '));
+ });
+ return options.length===1?options[0]:null;
+}
+async function forwardLastTestMessage(source,target){
+ if(source!==FORWARD_TEST_GROUP||target!==FORWARD_TEST_GROUP)
+  throw Error('ניסיון העברה מורשה רק מאותה קבוצת בדיקות אל עצמה');
+ if(messageInfoOpen())throw Error('חלונית פרטי הודעה פתוחה — סגור אותה לפני ניסוי העברה');
+ await openGroup(source);
+ if(!currentMatches(source))throw Error('קבוצת המקור לא אומתה');
+ const row=lastOutgoing();
+ if(!row)throw Error('לא נמצאה הודעה יוצאת אחרונה בקבוצת הבדיקות');
+ const knownId=row.getAttribute('data-id')||row.querySelector('[data-id]')?.getAttribute('data-id')||'';
+ if(!row.classList.contains('message-out')&&!knownId.startsWith('true_'))
+  throw Error('לא ניתן להוכיח שההודעה האחרונה היא הודעה שנשלחה מאיתנו');
+ await openForwardFromMessage(row);
+ let dialog=null;
+ for(let i=0;i<24;i++){dialog=forwardingDialog();if(dialog)break;await wait(200)}
+ if(!dialog)throw Error('חלון העברת ההודעה לא נפתח באופן מזוהה');
+ const search=[...dialog.querySelectorAll('input,[contenteditable="true"],[role="textbox"]')].find(shown);
+ if(search&&!readSearch(search).trim())setSearch(search,'פנימי שמעון נוה');
+ for(let i=0;i<30;i++){
+  const selection=forwardChoice(dialog,target);
+  if(selection){humanClick(selection);break}
+  await wait(170);
+ }
+ const chosen=forwardChoice(dialog,target);
+ if(!chosen)throw Error('קבוצת היעד לא נמצאה בחלון ההעברה');
+ const checked=chosen.matches('[aria-checked="true"],input:checked')||
+  !!chosen.querySelector('[aria-checked="true"],input:checked,[data-state="checked"]');
+ if(!checked)throw Error('לא ניתן לאמת שקבוצת הבדיקות נבחרה כיעד');
+ const confirm=forwardConfirm(dialog);
+ if(!confirm)throw Error('כפתור אישור ההעברה לא נמצא באופן חד-משמעי');
+ if(!currentMatches(source))throw Error('קבוצת המקור השתנתה לפני אישור ההעברה');
+ humanClick(confirm);
+ await wait(1200);
+ if(forwardingDialog())throw Error('חלון ההעברה עדיין פתוח — אין אישור שההעברה בוצעה');
+ return {ok:true};
+}
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V040'){reply({ok:true,version:'0.4.0',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V040')return;
+ if(msg?.type==='WA_TEST_PING_V041'){reply({ok:true,version:'0.4.1',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V041'&&msg?.type!=='FORWARD_TEST_V041')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- send(msg.text,msg.group,msg.attachment).then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
+ const promise=msg.type==='FORWARD_TEST_V041'
+   ?forwardLastTestMessage(msg.source,msg.target)
+   :send(msg.text,msg.group,msg.attachment);
+ promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
  return true;
 });
 })();
