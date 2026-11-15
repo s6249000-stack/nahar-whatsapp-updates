@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV039)return;
-globalThis.__naharSchedulerAgentV039=true;
+if(globalThis.__naharSchedulerAgentV0310)return;
+globalThis.__naharSchedulerAgentV0310=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -370,31 +370,51 @@ function previewCaption(){
 }
 function previewSend(){
  const root=attachmentOverlay();
- if(!root)return null;
- const main=document.querySelector('#main')?.getBoundingClientRect();
- if(!main)return null;
- const candidates=[...root.querySelectorAll('button,[role="button"],[data-icon="send"],[data-icon="send-filled"]')];
- const scored=[];
- for(const e of candidates){
-  const btn=e.closest('button,[role="button"]')||e;
-  if(!shown(btn)||btn.closest('#side'))continue;
+ if(!root||!visibleMediaStage(root))return null;
+ const main=document.querySelector('#main');
+ const viewer=(main||root).getBoundingClientRect();
+ const minBottom=Math.max(viewer.top+viewer.height*.70,window.innerHeight*.69);
+ const leftLimit=viewer.left+Math.min(205,viewer.width*.27);
+ const candidates=[...document.querySelectorAll('button,[role="button"]')];
+ const seen=new Set(),scored=[];
+ for(const btn of candidates){
+  if(seen.has(btn)||!shown(btn)||btn.closest('#side'))continue;
+  seen.add(btn);
   const r=btn.getBoundingClientRect();
-  if(r.width<28||r.width>105||r.height<28||r.height>105)continue;
-  // Screenshot-confirmed preview send lives in the lower LEFT of the conversation.
-  const nearBottom=r.top>main.bottom-165&&r.bottom<main.bottom+15;
-  const nearLeft=r.left>=main.left-15&&r.left<main.left+Math.min(main.width*.25,160);
-  if(!nearBottom||!nearLeft)continue;
-  const metadata=[attr(btn,'aria-label'),attr(btn,'title'),attr(btn,'data-testid'),
-    ...[...btn.querySelectorAll('[data-icon]')].map(n=>attr(n,'data-icon'))].join(' ');
-  const isSend=/send|שלח|שליחה|forward|arrow-right/i.test(metadata);
-  const circular=Math.abs(r.width-r.height)<18&&r.width>=38;
-  const score=(isSend?100:0)+(circular?20:0)+(r.width>=55?5:0);
-  // Never select an unlabelled shape without a verified preview.
-  if(isSend||(circular&&visibleMediaStage(root)))scored.push({btn,score});
+  if(r.width<32||r.width>108||r.height<32||r.height>108)continue;
+  // WhatsApp media-send is in the lower-left corner of the attachment editor.
+  if(r.left<viewer.left-25||r.left>leftLimit||r.bottom<minBottom||
+     r.top>window.innerHeight||r.bottom>window.innerHeight+14)continue;
+  const metadata=[
+   attr(btn,'aria-label'),attr(btn,'title'),attr(btn,'data-testid'),
+   ...[...btn.querySelectorAll('[data-icon],[data-testid],svg')].slice(0,10)
+     .flatMap(e=>[attr(e,'data-icon'),attr(e,'data-testid'),attr(e,'aria-label')])
+  ].join(' ');
+  const isSend=/send|שלח|שליחה|forward|arrow-(?:left|right)/i.test(metadata);
+  const isAdd=/attach|plus|add|צירוף|הוספ|הוסף|מדבקה|sticker/i.test(metadata)||
+     /^\s*[+＋]\s*$/.test(btn.textContent||'');
+  // The neighboring plus and thumbnail are not send controls.
+  if(isAdd||btn.querySelector('img,video'))continue;
+  const circular=Math.abs(r.width-r.height)<17&&r.width>=39;
+  const svg=!!btn.querySelector('svg,[data-icon]');
+  let dark=false;
+  for(let node=btn,depth=0;node&&depth<3;node=node.parentElement,depth++){
+   const bg=getComputedStyle(node).backgroundColor;
+   const nums=bg.match(/[\d.]+/g)?.map(Number)||[];
+   if(nums.length>=3&&(nums.length<4||nums[3]>.30)&&
+      (nums[0]+nums[1]+nums[2])<310){dark=true;break}
+  }
+  // An unlabeled button must match the screenshot-confirmed black circle.
+  if(!isSend&&!(circular&&svg&&dark))continue;
+  const score=(isSend?180:0)+(dark?75:0)+(circular?28:0)+(svg?12:0)
+    +Math.max(0,65-(r.left-viewer.left)*.5);
+  scored.push({btn,score,left:r.left});
  }
- scored.sort((a,b)=>b.score-a.score);
- if(scored.length===1||scored[0]?.score>scored[1]?.score)return scored[0]?.btn||null;
- return null;
+ scored.sort((x,y)=>y.score-x.score||x.left-y.left);
+ if(!scored.length)return null;
+ // No blind click on ambiguous controls: a unique top-scoring send is required.
+ if(scored[1]&&scored[0].score-scored[1].score<14)return null;
+ return scored[0].btn;
 }
 function previewDiagnostic(){
  const main=document.querySelector('#main');
@@ -459,8 +479,8 @@ async function send(text,name,attachment){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V039'){reply({ok:true,version:'0.3.9',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V039')return;
+ if(msg?.type==='WA_TEST_PING_V0310'){reply({ok:true,version:'0.3.10',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V0310')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
  send(msg.text,msg.group,msg.attachment).then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
