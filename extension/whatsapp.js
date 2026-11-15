@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV038)return;
-globalThis.__naharSchedulerAgentV038=true;
+if(globalThis.__naharSchedulerAgentV039)return;
+globalThis.__naharSchedulerAgentV039=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -330,38 +330,80 @@ async function attachmentInput(file){
  throw Error('שדה הצירוף של '+(kind==='media'?'תמונות וסרטונים':'מסמכים')+' לא הופיע');
 }
 function previewRoot(){
- const main=document.querySelector('#main');
- const selectors=['[data-testid="media-editor"]','[data-testid="media-preview"]','[data-testid="media-preview-dialog"]','[data-testid*="media"] [role="dialog"]','[role="dialog"]','[data-testid="media-upload"]'];
+ const selectors=['[data-testid="media-editor"]','[data-testid="media-preview"]','[data-testid="media-preview-dialog"]','[data-testid="media-upload"]','[data-testid*="preview"]','[role="dialog"]'];
  for(const q of selectors){
-  const els=[...document.querySelectorAll(q)].filter(shown).filter(e=>!e.closest('#side'));
-  if(els.length)return els.at(-1);
+  const el=[...document.querySelectorAll(q)].filter(shown).filter(e=>!e.closest('#side')).at(-1);
+  if(el)return el;
  }
- // WhatsApp often mounts attachment preview in an overlay inside #app (no dialog role).
- const overlays=[...document.querySelectorAll('[data-testid*="preview"],[data-testid*="media-editor"]')].filter(shown).filter(e=>!e.closest('#side'));
- return overlays.at(-1)||null;
+ // Current WhatsApp Web renders the media preview as a full conversation overlay,
+ // with a video/image stage, caption input and circular SEND button, without a dialog role.
+ const main=document.querySelector('#main');
+ if(main&&visibleMediaStage(main))return main;
+ return null;
+}
+function visibleMediaStage(root){
+ if(!root)return false;
+ const elements=[...root.querySelectorAll('video,img,canvas')].filter(shown)
+  .filter(e=>!e.closest('header,#side,footer'));
+ return elements.some(e=>{
+  const r=e.getBoundingClientRect();
+  return r.height>150&&r.width>110;
+ });
+}
+function attachmentOverlay(){
+ const main=document.querySelector('#main');
+ if(!main)return null;
+ if(visibleMediaStage(main))return main;
+ return previewRoot();
 }
 function previewCaption(){
- const roots=[previewRoot(),document.body].filter(Boolean);
- for(const root of roots){
-  const els=[...root.querySelectorAll('[contenteditable="true"][role="textbox"],[contenteditable="true"][data-testid*="caption"],[contenteditable="true"][aria-label*="caption" i],[contenteditable="true"][aria-label*="כיתוב"]')]
-   .filter(shown).filter(e=>!e.closest('#main footer'));
-  if(els.length)return els.at(-1);
- }
- return null;
+ const root=attachmentOverlay();
+ if(!root)return null;
+ const candidates=[...root.querySelectorAll('[contenteditable="true"],[role="textbox"]')]
+  .filter(shown).filter(e=>!e.closest('#side'))
+  .filter(e=>{
+   const r=e.getBoundingClientRect(),main=document.querySelector('#main')?.getBoundingClientRect();
+   return !!main&&r.top>main.top+100&&r.bottom>main.top+main.height*.55&&r.bottom<main.bottom-25;
+  });
+ const labelled=candidates.filter(e=>/caption|כיתוב|הקלדת הודעה|type a message/i.test([attr(e,'aria-label'),attr(e,'data-placeholder'),attr(e,'title'),e.parentElement?.textContent?.slice(0,35)].join(' ')));
+ return labelled.at(-1)||candidates.at(-1)||null;
 }
 function previewSend(){
- const root=previewRoot();
- const selectors=['button[data-testid="media-send"]','[data-testid="send"]','button[aria-label*="send" i]','button[aria-label*="שלח"]','[data-icon="send"]','[data-icon="send-filled"]'];
- const scopes=[root,document.body].filter(Boolean);
- for(const scope of scopes)for(const sel of selectors){
-  for(const e of scope.querySelectorAll(sel)){
-   const b=e.closest('button,[role="button"]')||e;
-   if(!shown(b)||b.closest('#main footer'))continue;
-   if(root&&!root.contains(b)&&!b.closest('[role="dialog"],[data-testid*="media"]'))continue;
-   return b;
-  }
+ const root=attachmentOverlay();
+ if(!root)return null;
+ const main=document.querySelector('#main')?.getBoundingClientRect();
+ if(!main)return null;
+ const candidates=[...root.querySelectorAll('button,[role="button"],[data-icon="send"],[data-icon="send-filled"]')];
+ const scored=[];
+ for(const e of candidates){
+  const btn=e.closest('button,[role="button"]')||e;
+  if(!shown(btn)||btn.closest('#side'))continue;
+  const r=btn.getBoundingClientRect();
+  if(r.width<28||r.width>105||r.height<28||r.height>105)continue;
+  // Screenshot-confirmed preview send lives in the lower LEFT of the conversation.
+  const nearBottom=r.top>main.bottom-165&&r.bottom<main.bottom+15;
+  const nearLeft=r.left>=main.left-15&&r.left<main.left+Math.min(main.width*.25,160);
+  if(!nearBottom||!nearLeft)continue;
+  const metadata=[attr(btn,'aria-label'),attr(btn,'title'),attr(btn,'data-testid'),
+    ...[...btn.querySelectorAll('[data-icon]')].map(n=>attr(n,'data-icon'))].join(' ');
+  const isSend=/send|שלח|שליחה|forward|arrow-right/i.test(metadata);
+  const circular=Math.abs(r.width-r.height)<18&&r.width>=38;
+  const score=(isSend?100:0)+(circular?20:0)+(r.width>=55?5:0);
+  // Never select an unlabelled shape without a verified preview.
+  if(isSend||(circular&&visibleMediaStage(root)))scored.push({btn,score});
  }
+ scored.sort((a,b)=>b.score-a.score);
+ if(scored.length===1||scored[0]?.score>scored[1]?.score)return scored[0]?.btn||null;
  return null;
+}
+function previewDiagnostic(){
+ const main=document.querySelector('#main');
+ const r=main?.getBoundingClientRect();
+ const media=main?[...main.querySelectorAll('video,img,canvas')].filter(shown).filter(e=>!e.closest('header,footer')):[];
+ const buttons=main&&r?[...main.querySelectorAll('button,[role="button"]')].filter(shown).filter(e=>{
+  const b=e.getBoundingClientRect();return b.top>r.bottom-165&&b.left<r.left+160;
+ }).length:0;
+ return 'תצוגת מדיה '+(visibleMediaStage(main)?'קיימת':'לא זוהתה')+', פריטי מדיה '+media.length+', כפתורים שמאליים תחתונים '+buttons+', שדה כיתוב '+(previewCaption()?'קיים':'חסר');
 }
 async function sendAttachment(attachment,text,name){
  const file=await decodeAttachment(attachment);
@@ -382,9 +424,9 @@ async function sendAttachment(attachment,text,name){
  let ready=false;
  for(let i=0;i<75;i++){
   await wait(200);
-  if(previewSend()&&(previewRoot()||previewCaption())){ready=true;break}
+  if(previewSend()&&attachmentOverlay()){ready=true;break}
  }
- if(!ready)throw Error('הקובץ לא הופיע בתצוגת הצירוף; לא נשלח');
+ if(!ready)throw Error('תצוגת הצירוף נפתחה אך לא זוהה כפתור השליחה — '+previewDiagnostic());
  if(text.trim()){
   const cap=previewCaption();
   if(!cap)throw Error('לא נמצא שדה כיתוב לקובץ. הקובץ לא נשלח');
@@ -417,8 +459,8 @@ async function send(text,name,attachment){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V038'){reply({ok:true,version:'0.3.8',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V038')return;
+ if(msg?.type==='WA_TEST_PING_V039'){reply({ok:true,version:'0.3.9',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V039')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
  send(msg.text,msg.group,msg.attachment).then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
