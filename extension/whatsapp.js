@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV036)return;
-globalThis.__naharSchedulerAgentV036=true;
+if(globalThis.__naharSchedulerAgentV037)return;
+globalThis.__naharSchedulerAgentV037=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -119,69 +119,75 @@ async function openGroup(name){
  // Never use Enter on an unverified result: it could open the wrong conversation.
  throw Error('נמצאה רשימת שיחות, אך לא אומתה פתיחת קבוצת הבדיקות');
 }
-function messageCanonical(value){
- return String(value||'')
-  .normalize('NFC')
-  .replace(/\r\n?/g,'\n')
-  .replace(/[\u200b-\u200f\u061c\u202a-\u202e\u2060\u2066-\u2069\ufeff]/g,'')
-  .replace(/[\ufe0e\ufe0f]/g,'')
-  .replace(/\u00a0/g,' ')
-  .replace(/[ \t]+/g,' ')
-  .replace(/[ \t]*\n[ \t]*/g,'\n')
-  .replace(/\n{2,}/g,'\n')
-  .trim();
+// Preserve all meaningful characters, consecutive blank lines, and spaces.
+// Only normalize OS line endings and invisible bidi controls inserted by WhatsApp.
+function exactText(value){
+ return String(value??'').normalize('NFC').replace(/\r\n?/g,'\n')
+   .replace(/[\u200b-\u200f\u061c\u202a-\u202e\u2060\u2066-\u2069\ufeff]/g,'')
+   .replace(/\u00a0/g,' ');
 }
-function getComposerVariants(e){
- const variants=[e.innerText||'',e.textContent||''];
- // WhatsApp sometimes renders explicit BR elements without a newline in textContent.
- let fromDom='';
- const visit=node=>{
-  for(const child of node.childNodes){
-   if(child.nodeType===3){fromDom+=child.nodeValue||'';continue;}
-   if(child.nodeType!==1)continue;
-   if(child.tagName==='BR'){fromDom+='\n';continue;}
-   if(child.getAttribute('data-testid')==='mention-plain-text')continue;
-   const block=/^(DIV|P)$/.test(child.tagName);
-   if(block&&fromDom&&!fromDom.endsWith('\n'))fromDom+='\n';
-   visit(child);
+function logicalDomText(root){
+ let out='';
+ const walk=(el)=>{
+  for(const n of el.childNodes){
+   if(n.nodeType===3){out+=n.nodeValue||'';continue;}
+   if(n.nodeType!==1)continue;
+   if(n.tagName==='BR'){out+='\n';continue;}
+   const block=/^(DIV|P)$/.test(n.tagName);
+   if(block&&out&&!out.endsWith('\n'))out+='\n';
+   walk(n);
   }
  };
- visit(e);variants.push(fromDom);
- return variants;
+ walk(root);
+ return out;
+}
+function composerReads(e){
+ const values=[e.innerText||'',logicalDomText(e)];
+ const inner=e.querySelector('[contenteditable="true"]');
+ if(inner)values.push(inner.innerText||'',logicalDomText(inner));
+ return values.map(exactText);
+}
+function exactMatches(e,original){
+ const expected=exactText(original);
+ return composerReads(e).some(v=>v===expected||v.replace(/\n$/,'')===expected);
+}
+function editorCursorAtEnd(e){
+ e.focus();
+ const sel=document.getSelection(),r=document.createRange();
+ r.selectNodeContents(e);r.collapse(false);sel.removeAllRanges();sel.addRange(r);
 }
 async function fillComposer(e,text){
  const original=String(text).replace(/\r\n?/g,'\n');
- const expected=messageCanonical(original);
- const read=()=>getComposerVariants(e).map(messageCanonical);
- const matches=()=>read().some(v=>v===expected);
- if(read().some(Boolean))throw Error('קיימת כבר טיוטה בשדה הכתיבה — לא שיניתי אותה');
- // Ensure selection is inside the actual contenteditable editor, not a placeholder wrapper.
- const editorNode=e.isContentEditable?e:e.querySelector('[contenteditable="true"]');
- if(!editorNode)throw Error('לא נמצא עורך WhatsApp שניתן לכתוב בו');
- editorNode.focus();
- const sel=document.getSelection(),range=document.createRange();
- range.selectNodeContents(editorNode);range.collapse(false);
- sel.removeAllRanges();sel.addRange(range);
- const html=original.split('\n').map(line=>line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')).join('<br>');
+ const target=e.isContentEditable?e:e.querySelector('[contenteditable="true"]');
+ if(!target)throw Error('לא נמצא שדה כתיבה פעיל');
+ if(composerReads(target).some(x=>x.trim()))throw Error('קיימת טיוטה בשיחה — לא דרסתי אותה');
+ const escape=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+ // Separate visual lines into DIV blocks; empty lines receive BR to prevent
+ // contenteditable engines from collapsing them.
+ const html=original.split('\n').map(x=>'<div>'+(x?escape(x):'<br>')+'</div>').join('');
+ editorCursorAtEnd(target);
  document.execCommand('insertHTML',false,html);
- await wait(300);
- if(matches())return;
- // In some WhatsApp builds insertHTML reports success but React discards it.
- // Only retry with plain text if the live editor is still entirely empty.
- if(read().some(Boolean)){
-  const actual=read()[0]||'';
-  throw Error('הטקסט הוקלד אך אינו תואם למקור — עצרתי לפני שליחה (מקור '+expected.length+' תווים, בפועל '+actual.length+')');
- }
- const live=e.closest('#main footer')?composer():e;
- if(!live||!currentMatches(activeSendingGroup))throw Error('שדה הכתיבה או השיחה השתנו בעת ההקלדה');
- live.focus();
- const selection=document.getSelection(),r=document.createRange();
- r.selectNodeContents(live);r.collapse(false);selection.removeAllRanges();selection.addRange(r);
- if(!document.execCommand('insertText',false,original))throw Error('WhatsApp לא קיבל הקלדת טקסט');
  await wait(350);
- if(matches())return;
- const actual=read()[0]||'';
- throw Error('ההודעה לא נקלטה בשדה הכתיבה — לא נשלחה (מקור '+expected.length+' תווים, בפועל '+actual.length+')');
+ if(exactMatches(target,original))return;
+ const reads=composerReads(target),actual=reads.find(x=>x.length)||'';
+ if(actual){
+  // Keep the draft visible for inspection, never silently send a changed message.
+  throw Error('הטקסט אינו זהה למקור — בוטלה השליחה (מקור '+exactText(original).length+', טיוטה '+actual.length+', שורות מקור '+original.split('\n').length+')');
+ }
+ // Only retry when the editor stayed empty.
+ editorCursorAtEnd(target);
+ document.execCommand('insertText',false,original);
+ await wait(350);
+ if(exactMatches(target,original))return;
+ const now=composerReads(target).find(x=>x.length)||'';
+ throw Error('הטקסט לא נקלט במדויק — לא נשלח (מקור '+exactText(original).length+', טיוטה '+now.length+')');
+}
+function containsLink(text){return /(?:https?:\/\/|www\.)[^\s<>"']+/i.test(text)}
+async function holdForLinkPreview(text,name){
+ if(!containsLink(text))return;
+ // Five seconds *after* the text has been inserted into the live composer.
+ await wait(5000);
+ if(!currentMatches(name))throw Error('השיחה השתנתה בזמן ההמתנה לתצוגה המקדימה');
 }
 function sendButton(){
  const m=document.querySelector('#main');if(!m)return null;
@@ -208,25 +214,66 @@ async function decodeAttachment(a){
  return new File(parts,a.name,{type:a.type||'application/octet-stream'});
 }
 function attachButton(){
- const root=document.querySelector('#main');if(!root)return null;
- const selectors=['button[aria-label*="Attach" i]','button[aria-label*="צרף"]','button[title*="Attach" i]','button[title*="צרף"]','[data-testid="clip"]','[data-icon="plus"]','[data-icon="clip"]','[data-icon="attach-menu-plus"]'];
- for(const sel of selectors)for(const el of root.querySelectorAll(sel)){const b=el.closest('button,[role="button"]')||el;if(shown(b)&&b.closest('footer'))return b}
+ const main=document.querySelector('#main');
+ if(!main)return null;
+ const selectors=['footer button[aria-label*="Attach" i]','footer button[aria-label*="צרף"]','footer button[aria-label*="הוסף"]','footer [data-testid="clip"]','footer [data-icon="clip"]','footer [data-icon="plus-rounded"]','footer [data-icon="plus"]'];
+ for(const selector of selectors)for(const e of main.querySelectorAll(selector)){
+  const b=e.closest('button,[role="button"]')||e;
+  if(shown(b)&&b.closest('footer'))return b;
+ }
  return null;
 }
-function attachmentInput(file){
- const all=[...document.querySelectorAll('input[type="file"]')];
- const isMedia=/^(image|video)\//.test(file.type);
- const capable=e=>{
-  const accept=attr(e,'accept').toLowerCase();
-  if(e.multiple&&accept.includes('image')&&!isMedia)return false;
-  if(isMedia)return accept.includes('image')||accept.includes('video')||accept==='';
-  return !accept||accept==='*'||accept.includes('application')||accept.includes('*/*')||accept.includes('*');
- };
- return all.find(e=>capable(e)&&!e.disabled)||null;
+const inputAccept=e=>String(e.getAttribute('accept')||'').toLowerCase().replace(/\s+/g,'');
+function isSticker(e){
+ const a=inputAccept(e),near=String(e.closest('[role="menuitem"],label')?.textContent||'')+' '+attr(e,'aria-label');
+ return /sticker|מדבקה/i.test(near)||a==='image/webp';
+}
+function inputScore(e,kind){
+ if(isSticker(e))return -1000;
+ const a=inputAccept(e);
+ const hint=[attr(e,'data-testid'),attr(e,'aria-label'),e.parentElement?.getAttribute('aria-label'),e.parentElement?.textContent?.slice(0,70)].join(' ');
+ if(kind==='media')return (/תמונות|photos|media/i.test(hint)?150:0)+(a.includes('video')?100:0)+(a.includes('image')?40:0)+(e.multiple?20:0);
+ return (/document|מסמכים|מסמך|קובץ/i.test(hint)?150:0)+(!a||a==='*'||a==='*/*'?100:0)+(a.includes('application')?30:0)-(a.includes('image')&&!a.includes('application')?200:0);
+}
+function menuItem(kind){
+ const selectors=kind==='media'?['[data-testid="mi-attach-media"]','[aria-label="Photos & videos"]','[aria-label="תמונות וסרטונים"]']:['[data-testid="mi-attach-document"]','[aria-label="Document"]','[aria-label="מסמך"]'];
+ for(const q of selectors){const el=[...document.querySelectorAll(q)].find(shown);if(el)return el}
+ const pattern=kind==='media'?/photos?\s*(?:&|and)\s*videos?|תמונות\s*(?:ו|&)\s*סרטונים/i:/document|מסמכים|מסמך/i;
+ return [...document.querySelectorAll('[role="menuitem"],[role="menu"] [role="button"]')].find(e=>shown(e)&&pattern.test(e.textContent||'')&&!e.closest('#side'))||null;
+}
+async function attachmentInput(file){
+ const kind=/^(image|video)\//.test(file.type)?'media':'document';
+ const before=new Set(document.querySelectorAll('input[type="file"]'));
+ const button=attachButton();if(!button)throw Error('כפתור צירוף הקבצים לא נמצא');
+ humanClick(button);
+ let item=null;
+ for(let i=0;i<24;i++){
+  const fresh=[...document.querySelectorAll('input[type="file"]')].filter(e=>!before.has(e)&&inputScore(e,kind)>0).sort((a,b)=>inputScore(b,kind)-inputScore(a,kind));
+  if(fresh.length)return fresh[0];
+  item=item||menuItem(kind);
+  if(item)break;
+  await wait(130);
+ }
+ if(item){
+  humanClick(item);
+  for(let i=0;i<40;i++){
+   const fresh=[...document.querySelectorAll('input[type="file"]')].filter(e=>!before.has(e)&&inputScore(e,kind)>0).sort((a,b)=>inputScore(b,kind)-inputScore(a,kind));
+   if(fresh.length)return fresh[0];
+   await wait(130);
+  }
+ }
+ throw Error('שדה הצירוף של '+(kind==='media'?'תמונות וסרטונים':'מסמכים')+' לא הופיע');
 }
 function previewRoot(){
- const els=[...document.querySelectorAll('[data-testid="media-editor"],[data-testid="media-preview"],[data-testid="media-preview-dialog"],[role="dialog"],[data-testid="media-upload"]')].filter(shown);
- return els.at(-1)||null;
+ const main=document.querySelector('#main');
+ const selectors=['[data-testid="media-editor"]','[data-testid="media-preview"]','[data-testid="media-preview-dialog"]','[data-testid*="media"] [role="dialog"]','[role="dialog"]','[data-testid="media-upload"]'];
+ for(const q of selectors){
+  const els=[...document.querySelectorAll(q)].filter(shown).filter(e=>!e.closest('#side'));
+  if(els.length)return els.at(-1);
+ }
+ // WhatsApp often mounts attachment preview in an overlay inside #app (no dialog role).
+ const overlays=[...document.querySelectorAll('[data-testid*="preview"],[data-testid*="media-editor"]')].filter(shown).filter(e=>!e.closest('#side'));
+ return overlays.at(-1)||null;
 }
 function previewCaption(){
  const roots=[previewRoot(),document.body].filter(Boolean);
@@ -253,19 +300,14 @@ function previewSend(){
 }
 async function sendAttachment(attachment,text,name){
  const file=await decodeAttachment(attachment);
- const existing=[...document.querySelectorAll('input[type="file"]')];
- const attach=attachButton();
- if(attach)humanClick(attach);
- let input=null;
- for(let i=0;i<20&&!input;i++){input=attachmentInput(file);if(!input)await wait(150)}
- if(!input)throw Error('כפתור צירוף הקבצים של WhatsApp לא נמצא');
+ const input=await attachmentInput(file);
  const dt=new DataTransfer();dt.items.add(file);
  try{input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}))}
  catch{throw Error('WhatsApp לא קיבל את הקובץ המצורף')}
  let ready=false;
- for(let i=0;i<35;i++){
-  await wait(220);
-  if(previewRoot()&&previewSend()){ready=true;break}
+ for(let i=0;i<75;i++){
+  await wait(200);
+  if(previewSend()&&(previewRoot()||previewCaption())){ready=true;break}
  }
  if(!ready)throw Error('הקובץ לא הופיע בתצוגת הצירוף; לא נשלח');
  if(text.trim()){
@@ -273,6 +315,7 @@ async function sendAttachment(attachment,text,name){
   if(!cap)throw Error('לא נמצא שדה כיתוב לקובץ. הקובץ לא נשלח');
   activeSendingGroup=name;
   await fillComposer(cap,text);
+  await holdForLinkPreview(text,name);
  }
  if(!currentMatches(name))throw Error('קבוצת הבדיקות השתנתה לפני שליחת הקובץ — בוטל');
  const button=previewSend();
@@ -291,6 +334,7 @@ async function send(text,name,attachment){
  if(norm(box.innerText))throw Error('יש טיוטה קיימת, בוטל');
  activeSendingGroup=name;
  await fillComposer(box,text);
+ await holdForLinkPreview(text,name);
  if(!currentMatches(name))throw Error('השיחה השתנתה לפני השליחה — בוטל');
  const b=sendButton();if(!b)throw Error('כפתור השליחה לא נמצא; ההודעה נותרה כטיוטה');
  // Exactly one click: repeated synthetic clicks could cause duplicate sends.
@@ -298,8 +342,8 @@ async function send(text,name,attachment){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V036'){reply({ok:true,version:'0.3.6',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V036')return;
+ if(msg?.type==='WA_TEST_PING_V037'){reply({ok:true,version:'0.3.7',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V037')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
  send(msg.text,msg.group,msg.attachment).then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
