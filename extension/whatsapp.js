@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV050)return;
-globalThis.__naharSchedulerAgentV050=true;
+if(globalThis.__naharSchedulerAgentV051)return;
+globalThis.__naharSchedulerAgentV051=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -738,61 +738,65 @@ async function stableForwardDialog(minSamples=3){
  }
  return null;
 }
-function fullForwardModal(inner){
- if(!inner||!shown(inner))return null;
- const base=inner.getBoundingClientRect();
- // The chat-selection area may be only 527px tall. Find its ancestor that
- // also contains the footer thumbnail and circular forwarding control.
- const options=[];
- for(let node=inner,depth=0;node&&node!==document.body&&depth<9;node=node.parentElement,depth++){
-  const r=node.getBoundingClientRect();
-  if(r.width<350||r.width>730||r.height<base.height+95||r.height>window.innerHeight+15)continue;
-  if(Math.abs(r.left-base.left)>70||r.top>base.top+12)continue;
-  const thumbnail=[...node.querySelectorAll('img,video,canvas')].filter(shown)
-   .some(e=>{const v=e.getBoundingClientRect();return v.top>base.bottom-5&&v.width>=25&&v.width<=170});
-  if(thumbnail)options.push({node,r});
- }
- options.sort((a,b)=>a.r.height-b.r.height);
- return options[0]?.node||null;
+// In the current WhatsApp build, the recipient list and the action footer are
+// sibling portal nodes. Never require the send arrow to be a child of the
+// 436x527 recipient-picker section.
+function forwardButtonRegion(inner){
+ const r=inner.getBoundingClientRect();
+ return {left:r.left-38,right:r.left+102,top:r.bottom+18,
+   bottom:Math.min(window.innerHeight-5,r.bottom+Math.min(330,window.innerHeight-r.bottom))};
+}
+function safeArrowShape(el){
+ if(!el||!shown(el))return false;
+ const r=el.getBoundingClientRect();
+ if(r.width<38||r.width>82||r.height<38||r.height>82||Math.abs(r.width-r.height)>14)return false;
+ const labelText=[attr(el,'aria-label'),attr(el,'title'),attr(el,'data-testid'),attr(el,'data-icon'),
+   ...[...el.querySelectorAll('[data-icon]')].map(x=>attr(x,'data-icon'))].join(' ');
+ if(/(?:close|cancel|info|back|add|plus|attach|mic|record|פרטי|בטל|סגור|הוסף)/i.test(labelText))return false;
+ const explicit=/(?:send|forward|העבר|שלח)/i.test(labelText);
+ const svg=[...el.querySelectorAll('svg')].some(x=>!!x.querySelector('path,polygon,polyline'));
+ const black=(()=>{
+  const m=getComputedStyle(el).backgroundColor.match(/rgba?\(([^)]+)\)/i);
+  const c=m?.[1].split(',').map(Number)||[];
+  return c.length>=3&&(c.length===3||c[3]>.7)&&c.slice(0,3).every(n=>n<95);
+ })();
+ return explicit||(black&&svg);
+}
+function findForwardArrow(inner){
+ const z=forwardButtonRegion(inner);
+ if(z.bottom-z.top<48)return null;
+ // Search globally because WhatsApp places the bottom action in a sibling
+ // of the recipient selector, not inside its DOM subtree.
+ const nodes=[...document.querySelectorAll('button,[role="button"],div,span')].filter(e=>{
+  if(!safeArrowShape(e))return false;
+  const r=e.getBoundingClientRect(),cx=(r.left+r.right)/2,cy=(r.top+r.bottom)/2;
+  return cx>=z.left&&cx<=z.right&&cy>=z.top&&cy<=z.bottom;
+ });
+ // Different wrappers can describe the same visible circle. Collapse nested
+ // candidates and require ONE geometrically distinct action in the region.
+ const unique=nodes.filter(e=>!nodes.some(x=>x!==e&&e.contains(x)));
+ const actionable=unique.filter(e=>{
+  const r=e.getBoundingClientRect(),cx=(r.left+r.right)/2,cy=(r.top+r.bottom)/2;
+  const stack=document.elementsFromPoint(cx,cy);
+  return stack.some(hit=>e===hit||e.contains(hit)||hit.contains(e));
+ });
+ if(actionable.length!==1)return null;
+ return actionable[0];
 }
 function forwardConfirmDiagnostics(inner){
- const ir=inner?.getBoundingClientRect(),full=fullForwardModal(inner);
- const rect=full?.getBoundingClientRect();
- const hit=rect?document.elementFromPoint(rect.left+34,rect.bottom-34):null;
- return 'בחירת יעד '+Math.round(ir?.width||0)+'x'+Math.round(ir?.height||0)+
-  ', חלון מלא '+(rect?Math.round(rect.width)+'x'+Math.round(rect.height):'חסר')+
-  ', רכיב מתחת לחץ '+(hit?.tagName||'אין');
+ const r=inner.getBoundingClientRect(),z=forwardButtonRegion(inner);
+ const all=[...document.querySelectorAll('button,[role="button"],div,span')].filter(shown).filter(e=>{
+  const b=e.getBoundingClientRect(),x=(b.left+b.right)/2,y=(b.top+b.bottom)/2;
+  return x>=z.left&&x<=z.right&&y>=z.top&&y<=z.bottom&&b.width>=35&&b.width<=100&&b.height>=35&&b.height<=100;
+ });
+ const candidate=all.filter(safeArrowShape);
+ return 'בחירת יעד '+Math.round(r.width)+'x'+Math.round(r.height)+
+  ', אזור חץ ('+[z.left,z.top,z.right,z.bottom].map(Math.round).join(',')+')'+
+  ', כפתורים באזור '+all.length+', מועמדי חץ '+candidate.length+
+  ', נבחר '+(findForwardArrow(inner)?'כן':'לא');
 }
 function forwardConfirm(inner){
- const modal=fullForwardModal(inner);
- if(!modal)return null;
- const r=modal.getBoundingClientRect();
- const point={x:r.left+33,y:r.bottom-35};
- const inZone=e=>{
-  if(!shown(e)||!modal.contains(e))return false;
-  const q=e.getBoundingClientRect();
-  return q.left>=r.left-10&&q.left<r.left+105&&q.bottom>r.bottom-105&&q.bottom<r.bottom+14&&
-   q.width>=38&&q.width<=82&&q.height>=38&&q.height<=82&&Math.abs(q.width-q.height)<15;
- };
- const named=[...modal.querySelectorAll('button,[role="button"],[data-testid],[data-icon],[aria-label]')]
-  .filter(inZone).filter(e=>{
-    const v=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),attr(e,'data-icon')].join(' ');
-    return /forward|send|העבר|שלח/i.test(v)&&!/info|add|cancel|close|back|פרטי|בטל|סגור/i.test(v);
-  });
- if(named.length===1)return named[0].closest('button,[role="button"]')||named[0];
- // Use screenshot-confirmed arrow location, but only if hit is an arrow control
- // within the verified full-height forwarding modal (never global UI).
- const hit=document.elementFromPoint(point.x,point.y);
- if(!hit||!modal.contains(hit))return null;
- const matches=[];
- for(let e=hit;e&&e!==modal;e=e.parentElement){
-  if(!inZone(e))continue;
-  const icons=[...e.querySelectorAll('svg,[data-icon]')];
-  const arrow=icons.some(n=>/send|forward|arrow/i.test([attr(n,'data-icon'),attr(n,'aria-label'),attr(n,'data-testid')].join(' '))||
-   (n.tagName.toLowerCase()==='svg'&&!!n.querySelector('path,polygon,polyline')));
-  if(arrow)matches.push(e);
- }
- return matches[0]||null;
+ return findForwardArrow(inner);
 }
 async function forwardLastTestMessage(source,target){
  if(source!==FORWARD_TEST_GROUP||target!==FORWARD_TEST_GROUP)
@@ -855,11 +859,11 @@ async function forwardLastTestMessage(source,target){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V050'){reply({ok:true,version:'0.5.0',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V050'&&msg?.type!=='FORWARD_TEST_V050')return;
+ if(msg?.type==='WA_TEST_PING_V051'){reply({ok:true,version:'0.5.1',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V051'&&msg?.type!=='FORWARD_TEST_V051')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='FORWARD_TEST_V050'
+ const promise=msg.type==='FORWARD_TEST_V051'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
