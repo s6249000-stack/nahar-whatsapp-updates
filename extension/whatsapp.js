@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV0311)return;
-globalThis.__naharSchedulerAgentV0311=true;
+if(globalThis.__naharSchedulerAgentV0312)return;
+globalThis.__naharSchedulerAgentV0312=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -368,53 +368,67 @@ function previewCaption(){
  const labelled=candidates.filter(e=>/caption|כיתוב|הקלדת הודעה|type a message/i.test([attr(e,'aria-label'),attr(e,'data-placeholder'),attr(e,'title'),e.parentElement?.textContent?.slice(0,35)].join(' ')));
  return labelled.at(-1)||candidates.at(-1)||null;
 }
-function darkCircleCandidate(el,viewer){
- if(!shown(el)||el.closest('#side'))return false;
- const r=el.getBoundingClientRect();
- if(r.width<43||r.width>90||r.height<43||r.height>90||Math.abs(r.width-r.height)>15)return false;
- if(r.left<viewer.left-15||r.left>viewer.left+Math.min(160,viewer.width*.22))return false;
- if(r.bottom<viewer.bottom-170||r.bottom>viewer.bottom+16)return false;
- const c=getComputedStyle(el),rgb=(c.backgroundColor.match(/[\d.]+/g)||[]).map(Number);
- const dark=rgb.length>=3&&(rgb.length<4||rgb[3]>.5)&&rgb[0]+rgb[1]+rgb[2]<240;
- if(!dark||el.querySelector('img,video,canvas'))return false;
- // Require the send-arrow symbol, not a random black circle.
- const descendants=[...el.querySelectorAll('svg,[data-icon]')];
- const hasArrow=descendants.some(x=>{
-  const icon=attr(x,'data-icon')+' '+attr(x,'aria-label');
-  if(/send|arrow|forward/i.test(icon))return true;
-  if(x.tagName.toLowerCase()==='svg'){
-   const view=attr(x,'viewBox'),path=x.querySelector('path,polygon,polyline');
-   return !!path&&!!view;
-  }
-  return false;
+function messageInfoOpen(){
+ const candidates=[...document.querySelectorAll('h1,h2,header,[role="heading"],[data-testid*="message-info"]')].filter(shown);
+ return candidates.some(e=>/^\s*(?:פרטי ההודעה|Message info|Info message)\s*$/i.test(e.textContent||'')||
+    /message-info/i.test(attr(e,'data-testid')));
+}
+function activeAttachmentEditor(){
+ if(messageInfoOpen())return null;
+ const main=document.querySelector('#main');if(!main||!shown(main))return null;
+ // Attachment editor has a large media preview AND a distinct, lower caption field
+ // plus a bottom thumbnail row with a dedicated add-more attachment control.
+ if(!visibleMediaStage(main)||!previewCaption())return null;
+ const r=main.getBoundingClientRect();
+ const thumbnails=[...main.querySelectorAll('img,video')].filter(shown).filter(e=>{
+  const b=e.getBoundingClientRect();return b.bottom>r.bottom-110&&b.top<r.bottom&&b.width<130&&b.height<130;
  });
- return hasArrow;
+ const addMore=[...main.querySelectorAll('button,[role="button"]')].filter(shown).filter(e=>{
+  const b=e.getBoundingClientRect(),t=[attr(e,'aria-label'),attr(e,'title'),e.textContent||''].join(' ');
+  return b.top>r.bottom-125&&b.width<90&&b.height<90&&(/^\s*[+＋]\s*$/.test(t)||/add|הוסף|צרף/i.test(t));
+ });
+ return thumbnails.length||addMore.length?main:null;
 }
 function previewSend(){
- const root=attachmentOverlay();
- if(!root||!visibleMediaStage(root))return null;
- const main=document.querySelector('#main'),viewer=(main||root).getBoundingClientRect();
- // Prioritize named send controls, regardless of their DOM tag.
- const exact=[...document.querySelectorAll('[aria-label],[title],[data-testid],[data-icon]')].filter(shown).filter(e=>{
-  const info=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),attr(e,'data-icon')].join(' ');
-  if(!/(?:send|שלח|שליחה|media-send)/i.test(info))return false;
-  const rect=e.getBoundingClientRect();
-  return rect.left>=viewer.left-20&&rect.left<viewer.left+Math.min(190,viewer.width*.25)&&
-   rect.bottom>viewer.bottom-175&&rect.bottom<viewer.bottom+20;
- });
- const getControl=e=>e.closest('button,[role="button"]')||e;
- const named=[...new Set(exact.map(getControl))].filter(x=>shown(x)&&!x.closest('#side'));
- if(named.length===1)return named[0];
- // Current screenshot: a solid dark circle with a white arrow at the bottom left.
- // This is sometimes a plain DIV, without button or role=button.
- const candidates=[...main.querySelectorAll('button,div,[role="button"]')].filter(e=>darkCircleCandidate(e,viewer));
- const unique=candidates.filter(e=>!candidates.some(other=>other!==e&&other.contains(e)));
- if(unique.length===1)return unique[0];
- if(unique.length>1){
-  const leftmost=[...unique].sort((a,b)=>a.getBoundingClientRect().left-b.getBoundingClientRect().left);
-  if(leftmost[1].getBoundingClientRect().left-leftmost[0].getBoundingClientRect().left>35)return leftmost[0];
+ const main=activeAttachmentEditor();if(!main)return null;
+ const bounds=main.getBoundingClientRect();
+ // Only explicitly tagged SEND buttons; no location-only clicking.
+ const candidates=[...main.querySelectorAll('button,[role="button"],[data-icon],svg')].filter(shown);
+ const found=new Set();
+ for(const e of candidates){
+  const btn=e.closest('button,[role="button"]')||e;
+  if(!shown(btn)||btn.closest('#side,header')||found.has(btn))continue;
+  const info=[
+   attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),attr(e,'data-icon'),
+   attr(btn,'aria-label'),attr(btn,'title'),attr(btn,'data-testid'),attr(btn,'data-icon'),
+   ...[...btn.querySelectorAll('[data-icon]')].map(n=>attr(n,'data-icon'))
+  ].join(' ').toLowerCase();
+  if(!/(?:^|[\s_-])(?:send|send-filled|media-send|compose-btn-send|שלח|שליחה)(?:$|[\s_-])/.test(info))continue;
+  if(/info|message-info|forward|delete|attach|plus|add|sticker|הוסף|מידע|פרטי/.test(info))continue;
+  const box=btn.getBoundingClientRect();
+  const inBottom=box.bottom>bounds.bottom-155&&box.bottom<=bounds.bottom+18;
+  const inLeft=box.left>=bounds.left-20&&box.left<=bounds.left+Math.min(200,bounds.width*.28);
+  if(!inBottom||!inLeft||box.width<25||box.width>105||box.height<25||box.height>105)continue;
+  found.add(btn);
  }
- return null;
+ return found.size===1?[...found][0]:null;
+}
+function previewControlDiagnostics(){
+ const main=document.querySelector('#main');
+ if(!main)return 'אין אזור שיחה';
+ const r=main.getBoundingClientRect();
+ const values=[...main.querySelectorAll('button,[role="button"]')].filter(shown).filter(e=>{
+  const b=e.getBoundingClientRect();
+  return b.bottom>r.bottom-165&&b.left>=r.left-20&&b.left<r.left+200;
+ }).slice(0,8).map(e=>{
+  const icon=[...e.querySelectorAll('[data-icon]')].map(n=>attr(n,'data-icon')).filter(Boolean).slice(0,3);
+  const names=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),...icon].filter(Boolean);
+  const rect=e.getBoundingClientRect();
+  return '{tag:'+e.tagName+',meta:'+names.join('/').slice(0,75)+',size:'+Math.round(rect.width)+'x'+Math.round(rect.height)+'}';
+ });
+ return 'חלונית פרטי הודעה '+(messageInfoOpen()?'פתוחה':'סגורה')+
+ ', עורך צירוף '+(activeAttachmentEditor()?'אומת':'לא אומת')+
+ ', כפתורים סמוכים: '+values.join(' ');
 }
 function previewDiagnostic(){
  const main=document.querySelector('#main');
@@ -427,6 +441,8 @@ function previewDiagnostic(){
 }
 async function sendAttachment(attachment,text,name){
  const file=await decodeAttachment(attachment);
+ if(messageInfoOpen())throw Error('חלונית פרטי ההודעה פתוחה. סגור אותה לפני ניסיון שליחה כדי למנוע לחיצה שגויה');
+ if(activeAttachmentEditor())throw Error('יש קובץ בטיוטת הצירוף מניסיון קודם. סגור את הטיוטה לפני ניסיון חדש כדי למנוע כפילות');
  let input=null;
  try{input=await attachmentInput(file);}
  catch(error){
@@ -444,9 +460,9 @@ async function sendAttachment(attachment,text,name){
  let ready=false;
  for(let i=0;i<75;i++){
   await wait(200);
-  if(previewSend()&&attachmentOverlay()){ready=true;break}
+  if(activeAttachmentEditor()&&previewSend()){ready=true;break}
  }
- if(!ready)throw Error('תצוגת הצירוף נפתחה אך לא זוהה כפתור השליחה — '+previewDiagnostic());
+ if(!ready)throw Error('צירוף הקובץ לא אומת או כפתור SEND לא זוהה — '+previewControlDiagnostics());
  if(text.trim()){
   const cap=previewCaption();
   if(!cap)throw Error('לא נמצא שדה כיתוב לקובץ. הקובץ לא נשלח');
@@ -456,9 +472,14 @@ async function sendAttachment(attachment,text,name){
  }
  if(!currentMatches(name))throw Error('קבוצת הבדיקות השתנתה לפני שליחת הקובץ — בוטל');
  const button=previewSend();
- if(!button)throw Error('כפתור שליחת הקובץ לא נמצא. '+previewDiagnostic());
+ if(!button)throw Error('כפתור SEND ייעודי לקובץ לא זוהה. '+previewControlDiagnostics());
  // Send the file once, with its caption if supplied. Do not send a separate text message.
  button.click();
+ // A click only means an attempt. Verify the attachment editor closed and the
+ // message-info pane did not open; otherwise do not report attempted success.
+ await wait(900);
+ if(messageInfoOpen())throw Error('נפתחה חלונית פרטי הודעה במקום שליחת קובץ — אין אישור שליחה');
+ if(activeAttachmentEditor())throw Error('כפתור השליחה נלחץ אך טיוטת הקובץ עדיין פתוחה — השליחה לא אומתה');
  return {ok:true};
 }
 function metrics(){return {hasMain:!!document.querySelector('#main'),hasHeader:!!document.querySelector('#main header'),headerFields:Math.min(100,currentNames().length),hasSide:!!document.querySelector('#side'),hasSearch:!!searchBox(),hasEditor:!!composer()}}
@@ -479,8 +500,8 @@ async function send(text,name,attachment){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V0311'){reply({ok:true,version:'0.3.11',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V0311')return;
+ if(msg?.type==='WA_TEST_PING_V0312'){reply({ok:true,version:'0.3.12',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V0312')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
  send(msg.text,msg.group,msg.attachment).then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
