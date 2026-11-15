@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV0312)return;
-globalThis.__naharSchedulerAgentV0312=true;
+if(globalThis.__naharSchedulerAgentV0313)return;
+globalThis.__naharSchedulerAgentV0313=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -329,115 +329,98 @@ async function attachmentInput(file){
  }
  throw Error('שדה הצירוף של '+(kind==='media'?'תמונות וסרטונים':'מסמכים')+' לא הופיע');
 }
-function previewRoot(){
- const selectors=['[data-testid="media-editor"]','[data-testid="media-preview"]','[data-testid="media-preview-dialog"]','[data-testid="media-upload"]','[data-testid*="preview"]','[role="dialog"]'];
- for(const q of selectors){
-  const el=[...document.querySelectorAll(q)].filter(shown).filter(e=>!e.closest('#side')).at(-1);
-  if(el)return el;
+// WhatsApp mounts the attachment editor in a portal outside #main on some builds.
+// Never derive preview identity from old chat-message videos or images.
+function messageInfoOpen(){
+ const headings=[...document.querySelectorAll('h1,h2,header,[role="heading"],[data-testid*="message-info"]')].filter(shown);
+ return headings.some(e=>/^\s*(?:פרטי ההודעה|Message info|Info message)\s*$/i.test(e.textContent||'')||
+   /message-info/i.test(attr(e,'data-testid')));
+}
+function probableCaption(el){
+ if(!shown(el)||el.closest('#side'))return false;
+ const meta=[attr(el,'aria-label'),attr(el,'aria-placeholder'),attr(el,'data-placeholder'),attr(el,'data-testid'),
+   attr(el.parentElement,'data-placeholder')].join(' ');
+ if(/caption|כיתוב|הקלדת הודעה|type a message/i.test(meta))return true;
+ const box=el.getBoundingClientRect();
+ const regular=composer();
+ if(el===regular||regular?.contains(el)||el.closest('#main footer'))return false;
+ return box.width>140&&box.height>=20&&box.top>window.innerHeight*.50;
+}
+function thumbnailEvidence(root){
+ const els=[...root.querySelectorAll('img,video,canvas')].filter(shown).filter(x=>!x.closest('#side'));
+ return els.some(e=>{
+  const r=e.getBoundingClientRect();
+  return r.width>25&&r.width<125&&r.height>25&&r.height<125&&r.top>window.innerHeight*.70;
+ });
+}
+function previewEditor(){
+ if(messageInfoOpen())return null;
+ const candidates=[...document.querySelectorAll('[contenteditable="true"],[role="textbox"]')].filter(probableCaption);
+ for(const cap of candidates.reverse()){
+  // A dedicated attachment overlay has both a caption field and a media thumbnail.
+  let node=cap;
+  for(let depth=0;node&&depth<9;depth++,node=node.parentElement){
+   if(node===document.body)break;
+   const box=node.getBoundingClientRect();
+   if(box.width<250||box.height<150)continue;
+   if(thumbnailEvidence(node))return {root:node,caption:cap};
+  }
  }
- // Current WhatsApp Web renders the media preview as a full conversation overlay,
- // with a video/image stage, caption input and circular SEND button, without a dialog role.
- const main=document.querySelector('#main');
- if(main&&visibleMediaStage(main))return main;
  return null;
 }
-function visibleMediaStage(root){
- if(!root)return false;
- const elements=[...root.querySelectorAll('video,img,canvas')].filter(shown)
-  .filter(e=>!e.closest('header,#side,footer'));
- return elements.some(e=>{
-  const r=e.getBoundingClientRect();
-  return r.height>150&&r.width>110;
- });
-}
-function attachmentOverlay(){
- const main=document.querySelector('#main');
- if(!main)return null;
- if(visibleMediaStage(main))return main;
- return previewRoot();
-}
 function previewCaption(){
- const root=attachmentOverlay();
- if(!root)return null;
- const candidates=[...root.querySelectorAll('[contenteditable="true"],[role="textbox"]')]
-  .filter(shown).filter(e=>!e.closest('#side'))
-  .filter(e=>{
-   const r=e.getBoundingClientRect(),main=document.querySelector('#main')?.getBoundingClientRect();
-   return !!main&&r.top>main.top+100&&r.bottom>main.top+main.height*.55&&r.bottom<main.bottom-25;
-  });
- const labelled=candidates.filter(e=>/caption|כיתוב|הקלדת הודעה|type a message/i.test([attr(e,'aria-label'),attr(e,'data-placeholder'),attr(e,'title'),e.parentElement?.textContent?.slice(0,35)].join(' ')));
- return labelled.at(-1)||candidates.at(-1)||null;
-}
-function messageInfoOpen(){
- const candidates=[...document.querySelectorAll('h1,h2,header,[role="heading"],[data-testid*="message-info"]')].filter(shown);
- return candidates.some(e=>/^\s*(?:פרטי ההודעה|Message info|Info message)\s*$/i.test(e.textContent||'')||
-    /message-info/i.test(attr(e,'data-testid')));
+ return previewEditor()?.caption||null;
 }
 function activeAttachmentEditor(){
- if(messageInfoOpen())return null;
- const main=document.querySelector('#main');if(!main||!shown(main))return null;
- // Attachment editor has a large media preview AND a distinct, lower caption field
- // plus a bottom thumbnail row with a dedicated add-more attachment control.
- if(!visibleMediaStage(main)||!previewCaption())return null;
- const r=main.getBoundingClientRect();
- const thumbnails=[...main.querySelectorAll('img,video')].filter(shown).filter(e=>{
-  const b=e.getBoundingClientRect();return b.bottom>r.bottom-110&&b.top<r.bottom&&b.width<130&&b.height<130;
- });
- const addMore=[...main.querySelectorAll('button,[role="button"]')].filter(shown).filter(e=>{
-  const b=e.getBoundingClientRect(),t=[attr(e,'aria-label'),attr(e,'title'),e.textContent||''].join(' ');
-  return b.top>r.bottom-125&&b.width<90&&b.height<90&&(/^\s*[+＋]\s*$/.test(t)||/add|הוסף|צרף/i.test(t));
- });
- return thumbnails.length||addMore.length?main:null;
+ return previewEditor()?.root||null;
 }
-function previewSend(){
- const main=activeAttachmentEditor();if(!main)return null;
- const bounds=main.getBoundingClientRect();
- // Only explicitly tagged SEND buttons; no location-only clicking.
- const candidates=[...main.querySelectorAll('button,[role="button"],[data-icon],svg')].filter(shown);
+function exactSendControl(root){
+ const nodes=[...root.querySelectorAll('button,[role="button"],[aria-label],[title],[data-icon],[data-testid]')].filter(shown);
  const found=new Set();
- for(const e of candidates){
-  const btn=e.closest('button,[role="button"]')||e;
-  if(!shown(btn)||btn.closest('#side,header')||found.has(btn))continue;
-  const info=[
-   attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),attr(e,'data-icon'),
-   attr(btn,'aria-label'),attr(btn,'title'),attr(btn,'data-testid'),attr(btn,'data-icon'),
-   ...[...btn.querySelectorAll('[data-icon]')].map(n=>attr(n,'data-icon'))
-  ].join(' ').toLowerCase();
-  if(!/(?:^|[\s_-])(?:send|send-filled|media-send|compose-btn-send|שלח|שליחה)(?:$|[\s_-])/.test(info))continue;
-  if(/info|message-info|forward|delete|attach|plus|add|sticker|הוסף|מידע|פרטי/.test(info))continue;
-  const box=btn.getBoundingClientRect();
-  const inBottom=box.bottom>bounds.bottom-155&&box.bottom<=bounds.bottom+18;
-  const inLeft=box.left>=bounds.left-20&&box.left<=bounds.left+Math.min(200,bounds.width*.28);
-  if(!inBottom||!inLeft||box.width<25||box.width>105||box.height<25||box.height>105)continue;
+ for(const node of nodes){
+  const btn=node.closest('button,[role="button"]')||node;
+  const meta=[attr(node,'data-testid'),attr(node,'data-icon'),attr(node,'aria-label'),attr(node,'title'),
+    attr(btn,'data-testid'),attr(btn,'data-icon'),attr(btn,'aria-label'),attr(btn,'title')].join(' ');
+  if(!/(?:^|[\s_-])(?:send|send-filled|media-send|compose-btn-send|שלח|שליחה)(?:$|[\s_-])/.test(meta))continue;
+  if(/info|forward|attach|plus|add|הוסף|מידע|פרטי/.test(meta))continue;
+  const r=btn.getBoundingClientRect();
+  if(r.width<25||r.height<25||r.width>110||r.height>110)continue;
+  if(r.top<window.innerHeight*.65)continue;
   found.add(btn);
  }
  return found.size===1?[...found][0]:null;
 }
-function previewControlDiagnostics(){
- const main=document.querySelector('#main');
- if(!main)return 'אין אזור שיחה';
- const r=main.getBoundingClientRect();
- const values=[...main.querySelectorAll('button,[role="button"]')].filter(shown).filter(e=>{
-  const b=e.getBoundingClientRect();
-  return b.bottom>r.bottom-165&&b.left>=r.left-20&&b.left<r.left+200;
- }).slice(0,8).map(e=>{
-  const icon=[...e.querySelectorAll('[data-icon]')].map(n=>attr(n,'data-icon')).filter(Boolean).slice(0,3);
-  const names=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),...icon].filter(Boolean);
-  const rect=e.getBoundingClientRect();
-  return '{tag:'+e.tagName+',meta:'+names.join('/').slice(0,75)+',size:'+Math.round(rect.width)+'x'+Math.round(rect.height)+'}';
- });
- return 'חלונית פרטי הודעה '+(messageInfoOpen()?'פתוחה':'סגורה')+
- ', עורך צירוף '+(activeAttachmentEditor()?'אומת':'לא אומת')+
- ', כפתורים סמוכים: '+values.join(' ');
+function previewSend(){
+ const e=previewEditor();
+ if(!e)return null;
+ return exactSendControl(e.root);
 }
-function previewDiagnostic(){
- const main=document.querySelector('#main');
- const r=main?.getBoundingClientRect();
- const media=main?[...main.querySelectorAll('video,img,canvas')].filter(shown).filter(e=>!e.closest('header,footer')):[];
- const buttons=main&&r?[...main.querySelectorAll('button,[role="button"]')].filter(shown).filter(e=>{
-  const b=e.getBoundingClientRect();return b.top>r.bottom-165&&b.left<r.left+160;
- }).length:0;
- return 'תצוגת מדיה '+(visibleMediaStage(main)?'קיימת':'לא זוהתה')+', פריטי מדיה '+media.length+', כפתורים שמאליים תחתונים '+buttons+', שדה כיתוב '+(previewCaption()?'קיים':'חסר');
+function previewControlDiagnostics(){
+ const caps=[...document.querySelectorAll('[contenteditable="true"],[role="textbox"]')].filter(probableCaption);
+ const thumbs=[...document.querySelectorAll('img,video,canvas')].filter(shown).filter(e=>{
+  const r=e.getBoundingClientRect();
+  return !e.closest('#side')&&r.top>window.innerHeight*.70&&r.width<125&&r.height<125;
+ });
+ const overlay=previewEditor();
+ return 'חלונית פרטי הודעה '+(messageInfoOpen()?'פתוחה':'סגורה')+
+ ', שדות כיתוב מועמדים '+caps.length+', תמונות ממוזערות '+thumbs.length+
+ ', עורך צירוף '+(overlay?'אומת':'לא אומת')+
+ ', כפתור SEND מזוהה '+(overlay&&exactSendControl(overlay.root)?'כן':'לא');
+}
+async function tryPreviewEnter(){
+ const e=previewEditor();
+ if(!e)throw Error('Enter לא הופעל: עורך צירוף קובץ לא אומת');
+ // Never press Enter on a normal chat composer or message info pane.
+ if(e.caption===composer()||messageInfoOpen())throw Error('Enter בוטל כדי למנוע שליחה למקום שגוי');
+ e.caption.focus();
+ for(const type of ['keydown','keypress','keyup']){
+  const event=new KeyboardEvent(type,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true,composed:true});
+  e.caption.dispatchEvent(event);
+ }
+ await wait(1250);
+ if(messageInfoOpen())throw Error('נפתחו פרטי הודעה במקום שליחה — לא בוצעה שליחה');
+ if(previewEditor())throw Error('Enter נשלח לשדה הכיתוב, אך תצוגת הצירוף עדיין פתוחה — לא אומתה שליחה');
+ return {ok:true};
 }
 async function sendAttachment(attachment,text,name){
  const file=await decodeAttachment(attachment);
@@ -460,9 +443,9 @@ async function sendAttachment(attachment,text,name){
  let ready=false;
  for(let i=0;i<75;i++){
   await wait(200);
-  if(activeAttachmentEditor()&&previewSend()){ready=true;break}
+  if(previewEditor()){ready=true;break}
  }
- if(!ready)throw Error('צירוף הקובץ לא אומת או כפתור SEND לא זוהה — '+previewControlDiagnostics());
+ if(!ready)throw Error('עורך הצירוף לא זוהה בבטחה — '+previewControlDiagnostics());
  if(text.trim()){
   const cap=previewCaption();
   if(!cap)throw Error('לא נמצא שדה כיתוב לקובץ. הקובץ לא נשלח');
@@ -472,14 +455,12 @@ async function sendAttachment(attachment,text,name){
  }
  if(!currentMatches(name))throw Error('קבוצת הבדיקות השתנתה לפני שליחת הקובץ — בוטל');
  const button=previewSend();
- if(!button)throw Error('כפתור SEND ייעודי לקובץ לא זוהה. '+previewControlDiagnostics());
- // Send the file once, with its caption if supplied. Do not send a separate text message.
+ if(!button)return tryPreviewEnter();
+ // Use only explicitly labelled SEND controls inside the *verified attachment editor*.
  button.click();
- // A click only means an attempt. Verify the attachment editor closed and the
- // message-info pane did not open; otherwise do not report attempted success.
- await wait(900);
+ await wait(1250);
  if(messageInfoOpen())throw Error('נפתחה חלונית פרטי הודעה במקום שליחת קובץ — אין אישור שליחה');
- if(activeAttachmentEditor())throw Error('כפתור השליחה נלחץ אך טיוטת הקובץ עדיין פתוחה — השליחה לא אומתה');
+ if(previewEditor())throw Error('כפתור SEND נלחץ אך טיוטת הקובץ עדיין פתוחה — השליחה לא אומתה');
  return {ok:true};
 }
 function metrics(){return {hasMain:!!document.querySelector('#main'),hasHeader:!!document.querySelector('#main header'),headerFields:Math.min(100,currentNames().length),hasSide:!!document.querySelector('#side'),hasSearch:!!searchBox(),hasEditor:!!composer()}}
@@ -500,8 +481,8 @@ async function send(text,name,attachment){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V0312'){reply({ok:true,version:'0.3.12',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V0312')return;
+ if(msg?.type==='WA_TEST_PING_V0313'){reply({ok:true,version:'0.3.13',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V0313')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
  send(msg.text,msg.group,msg.attachment).then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
