@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV049)return;
-globalThis.__naharSchedulerAgentV049=true;
+if(globalThis.__naharSchedulerAgentV050)return;
+globalThis.__naharSchedulerAgentV050=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -631,36 +631,25 @@ async function openForwardFromMessage(row){
  throw Error('תפריט העברת ההודעה לא נפתח או שאפשרות העברה לא זוהתה');
 }
 function forwardingDialog(){
- const title=/^(?:העברת הודעה אל|העבר הודעה אל|Forward message to|Forward to|העבר אל)$/i;
+ // Return the stable chat-selector region, even before a destination has been
+ // selected. Requiring a footer recipient chip caused the 0.4.9 regression.
+ const heading=/^(?:העברת הודעה אל|העבר הודעה אל|Forward message to|Forward to|העבר אל)$/i;
  const headings=[...document.querySelectorAll('h1,h2,h3,[role="heading"],span,div')]
-  .filter(shown).filter(e=>e.children.length<=2&&title.test(norm(e.textContent)));
+  .filter(shown).filter(e=>e.children.length<=2&&heading.test(norm(e.textContent)));
  const matches=[];
- for(const h of headings){
-  let e=h;
-  for(let depth=0;depth<15&&e&&e!==document.body;depth++,e=e.parentElement){
-   const r=e.getBoundingClientRect();
+ for(const title of headings){
+  for(let el=title,depth=0;el&&el!==document.body&&depth<15;el=el.parentElement,depth++){
+   const r=el.getBoundingClientRect();
    if(r.width<355||r.width>700||r.height<490||r.height>window.innerHeight+12)continue;
    if(r.left<0||r.right>window.innerWidth+12||r.top<0)continue;
-   const fields=[...e.querySelectorAll('input,[role="textbox"],[contenteditable="true"]')].filter(shown);
-   if(!fields.length)continue;
-   // Actual full modal in screenshot includes the thumbnail and the bottom
-   // recipient chip; the previously selected 436x527 element did not.
-   const media=[...e.querySelectorAll('img,video,canvas')].filter(shown)
-    .filter(x=>{const b=x.getBoundingClientRect();return b.width>25&&b.width<150&&b.top>r.top+r.height*.55});
-   const recipient=[...e.querySelectorAll('[title],[aria-label],span[dir="auto"]')].filter(shown)
-    .filter(x=>{const b=x.getBoundingClientRect();return b.top>r.bottom-120&&lexical(attr(x,'title')||attr(x,'aria-label')||(x.children.length?'':x.textContent))===lexical(FORWARD_TEST_GROUP)});
-   matches.push({node:e,r,media:media.length,recipient:recipient.length});
+   if(![...el.querySelectorAll('input,[role="textbox"],[contenteditable="true"]')].some(shown))continue;
+   const close=[...el.querySelectorAll('[aria-label],[data-icon],button')].filter(shown)
+    .some(e=>/close|סגור/i.test([attr(e,'aria-label'),attr(e,'data-icon'),attr(e,'title')].join(' ')));
+   matches.push({el,area:r.width*r.height,close});
   }
  }
- // Prefer the OUTER, full-height modal — not the inner list section whose bottom
- // is ~250px above the real forward arrow. It must contain the bottom thumbnail.
- const complete=matches.filter(x=>x.media>0&&x.recipient>0);
- if(complete.length){
-  complete.sort((a,b)=>b.r.height-a.r.height);
-  return complete[0].node;
- }
- // If the complete modal hasn't appeared yet, don't return an inner panel.
- return null;
+ matches.sort((x,y)=>x.area-y.area);
+ return (matches.find(x=>x.close)||matches[0])?.el||null;
 }
 function forwardChoice(dialog,target){
  const wanted=lexical(target);
@@ -749,57 +738,61 @@ async function stableForwardDialog(minSamples=3){
  }
  return null;
 }
-function forwardArrowCandidates(dialog){
- const d=dialog.getBoundingClientRect();
- // The action sits in the last 90px of the ACTUAL full modal, at its LEFT edge.
- const inArea=e=>{
-  if(!shown(e)||!dialog.contains(e))return false;
-  const r=e.getBoundingClientRect();
-  return r.width>=38&&r.width<=85&&r.height>=38&&r.height<=85&&
-   Math.abs(r.width-r.height)<=16&&r.left>=d.left-8&&r.left<d.left+110&&
-   r.top>d.bottom-112&&r.bottom<=d.bottom+12;
- };
- const all=[...dialog.querySelectorAll('button,[role="button"],div,span,[data-icon],svg')].filter(inArea);
- const arrowName=e=>/(?:forward|send|arrow|העבר|שלח)/i.test(
-  [attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),attr(e,'data-icon'),
-  ...[...e.querySelectorAll('[data-icon]')].map(x=>attr(x,'data-icon'))].join(' '));
- const dark=e=>{
-  const match=getComputedStyle(e).backgroundColor.match(/rgba?\(([^)]+)\)/i);
-  const vals=match?.[1].split(',').map(Number)||[];
-  return vals.length>=3&&(vals.length===3||vals[3]>.6)&&vals.slice(0,3).every(x=>x<85);
- };
- // Permit a DIV whose SVG is drawn in its pseudo-element or nested wrapper.
- const candidates=all.filter(e=>arrowName(e)||dark(e));
- return candidates.filter(e=>!candidates.some(other=>other!==e&&e.contains(other)));
-}
-function forwardConfirmDiagnostics(dialog){
- const r=dialog.getBoundingClientRect();
- const x=r.left+35,y=r.bottom-36;
- const hit=document.elementFromPoint(x,y);
- const area=[...dialog.querySelectorAll('button,[role="button"],div,span,svg,[data-icon]')].filter(e=>{
-  if(!shown(e))return false;const b=e.getBoundingClientRect();
-  return b.left>=r.left-8&&b.left<r.left+120&&b.top>r.bottom-120&&b.bottom<r.bottom+15&&
-   b.width>=25&&b.width<130&&b.height>=25&&b.height<130;
- });
- const styles=area.slice(0,8).map(e=>e.tagName+':'+Math.round(e.getBoundingClientRect().width)+'x'+Math.round(e.getBoundingClientRect().height)).join(',');
- return 'חלון '+Math.round(r.width)+'x'+Math.round(r.height)+
-  ', נקודת חץ '+Math.round(x)+','+Math.round(y)+', פגיעה '+(hit?.tagName||'אין')+
-  ', רכיבים '+area.length+', מועמדי חץ '+forwardArrowCandidates(dialog).length+
-  ', גדלים '+styles;
-}
-function forwardConfirm(dialog){
- const d=dialog.getBoundingClientRect();
- if(d.width<355||d.width>700||d.height<Math.min(575,window.innerHeight*.68))return null;
- const candidates=forwardArrowCandidates(dialog);
- if(candidates.length===1)return candidates[0];
- // Hit testing: verify the actual arrow DOM directly at the bottom LEFT,
- // never a location derived from the inner list.
- const hit=document.elementFromPoint(d.left+35,d.bottom-36);
- if(!hit||!dialog.contains(hit))return null;
- for(let e=hit;e&&e!==dialog;e=e.parentElement){
-  if(candidates.includes(e))return e;
+function fullForwardModal(inner){
+ if(!inner||!shown(inner))return null;
+ const base=inner.getBoundingClientRect();
+ // The chat-selection area may be only 527px tall. Find its ancestor that
+ // also contains the footer thumbnail and circular forwarding control.
+ const options=[];
+ for(let node=inner,depth=0;node&&node!==document.body&&depth<9;node=node.parentElement,depth++){
+  const r=node.getBoundingClientRect();
+  if(r.width<350||r.width>730||r.height<base.height+95||r.height>window.innerHeight+15)continue;
+  if(Math.abs(r.left-base.left)>70||r.top>base.top+12)continue;
+  const thumbnail=[...node.querySelectorAll('img,video,canvas')].filter(shown)
+   .some(e=>{const v=e.getBoundingClientRect();return v.top>base.bottom-5&&v.width>=25&&v.width<=170});
+  if(thumbnail)options.push({node,r});
  }
- return null;
+ options.sort((a,b)=>a.r.height-b.r.height);
+ return options[0]?.node||null;
+}
+function forwardConfirmDiagnostics(inner){
+ const ir=inner?.getBoundingClientRect(),full=fullForwardModal(inner);
+ const rect=full?.getBoundingClientRect();
+ const hit=rect?document.elementFromPoint(rect.left+34,rect.bottom-34):null;
+ return 'בחירת יעד '+Math.round(ir?.width||0)+'x'+Math.round(ir?.height||0)+
+  ', חלון מלא '+(rect?Math.round(rect.width)+'x'+Math.round(rect.height):'חסר')+
+  ', רכיב מתחת לחץ '+(hit?.tagName||'אין');
+}
+function forwardConfirm(inner){
+ const modal=fullForwardModal(inner);
+ if(!modal)return null;
+ const r=modal.getBoundingClientRect();
+ const point={x:r.left+33,y:r.bottom-35};
+ const inZone=e=>{
+  if(!shown(e)||!modal.contains(e))return false;
+  const q=e.getBoundingClientRect();
+  return q.left>=r.left-10&&q.left<r.left+105&&q.bottom>r.bottom-105&&q.bottom<r.bottom+14&&
+   q.width>=38&&q.width<=82&&q.height>=38&&q.height<=82&&Math.abs(q.width-q.height)<15;
+ };
+ const named=[...modal.querySelectorAll('button,[role="button"],[data-testid],[data-icon],[aria-label]')]
+  .filter(inZone).filter(e=>{
+    const v=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),attr(e,'data-icon')].join(' ');
+    return /forward|send|העבר|שלח/i.test(v)&&!/info|add|cancel|close|back|פרטי|בטל|סגור/i.test(v);
+  });
+ if(named.length===1)return named[0].closest('button,[role="button"]')||named[0];
+ // Use screenshot-confirmed arrow location, but only if hit is an arrow control
+ // within the verified full-height forwarding modal (never global UI).
+ const hit=document.elementFromPoint(point.x,point.y);
+ if(!hit||!modal.contains(hit))return null;
+ const matches=[];
+ for(let e=hit;e&&e!==modal;e=e.parentElement){
+  if(!inZone(e))continue;
+  const icons=[...e.querySelectorAll('svg,[data-icon]')];
+  const arrow=icons.some(n=>/send|forward|arrow/i.test([attr(n,'data-icon'),attr(n,'aria-label'),attr(n,'data-testid')].join(' '))||
+   (n.tagName.toLowerCase()==='svg'&&!!n.querySelector('path,polygon,polyline')));
+  if(arrow)matches.push(e);
+ }
+ return matches[0]||null;
 }
 async function forwardLastTestMessage(source,target){
  if(source!==FORWARD_TEST_GROUP||target!==FORWARD_TEST_GROUP)
@@ -862,11 +855,11 @@ async function forwardLastTestMessage(source,target){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V049'){reply({ok:true,version:'0.4.9',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V049'&&msg?.type!=='FORWARD_TEST_V049')return;
+ if(msg?.type==='WA_TEST_PING_V050'){reply({ok:true,version:'0.5.0',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V050'&&msg?.type!=='FORWARD_TEST_V050')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='FORWARD_TEST_V049'
+ const promise=msg.type==='FORWARD_TEST_V050'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
