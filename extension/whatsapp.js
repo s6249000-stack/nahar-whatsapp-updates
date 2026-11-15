@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV043)return;
-globalThis.__naharSchedulerAgentV043=true;
+if(globalThis.__naharSchedulerAgentV044)return;
+globalThis.__naharSchedulerAgentV044=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -649,19 +649,78 @@ function forwardingDialog(){
 }
 function forwardChoice(dialog,target){
  const wanted=lexical(target);
- const els=[...dialog.querySelectorAll('[title],[aria-label],span[dir="auto"]')].filter(shown)
+ const candidates=[...dialog.querySelectorAll('[title],[aria-label],span[dir="auto"]')].filter(shown)
   .filter(e=>lexical(attr(e,'title')||attr(e,'aria-label')||(e.children.length?'':e.textContent))===wanted);
- const rows=[...new Set(els.map(e=>e.closest('[role="row"],[role="checkbox"],[data-testid*="cell"],[tabindex]')||e))];
- return rows.length===1?rows[0]:null;
+ if(!candidates.length)return null;
+ // Name may be a nested span; use the visible whole chat result, not its text span.
+ const rows=candidates.map(e=>{
+  let p=e;
+  for(let i=0;i<7&&p&&p!==dialog;i++,p=p.parentElement){
+   const r=p.getBoundingClientRect();
+   if(r.width>=240&&r.height>=48&&r.height<=140&&
+      (p.querySelector('[role="checkbox"],input[type="checkbox"],[data-icon*="check"],svg')||
+       p.matches('[role="row"],[data-testid*="cell"]')))return p;
+  }
+  return e.closest('[role="row"],[data-testid*="cell"],[tabindex]')||e;
+ });
+ const distinct=[...new Set(rows)].filter(shown);
+ // Prefer the smallest row containing checkbox graphics.
+ distinct.sort((x,y)=>x.getBoundingClientRect().height-y.getBoundingClientRect().height);
+ if(distinct.length>1&&!distinct[0].contains(distinct[1])&&!distinct[1].contains(distinct[0]))return null;
+ return distinct[0]||null;
+}
+function forwardSelectionState(dialog,row,target){
+ if(!row||!shown(row))return {selected:false,reason:'no-row'};
+ const checkboxes=[row,...row.querySelectorAll('[role="checkbox"],input[type="checkbox"],[aria-checked],[data-state]')];
+ if(checkboxes.some(e=>e.checked===true||attr(e,'aria-checked')==='true'||attr(e,'data-state')==='checked'))
+  return {selected:true,reason:'checkbox'};
+ // In the screenshot WhatsApp renders the checked target as a black box
+ // with a white check mark; the control often lacks semantic checkbox attributes.
+ const icons=[...row.querySelectorAll('[data-icon],svg')].filter(shown);
+ const checks=icons.filter(e=>/(?:check|tick|selected)/i.test(
+  [attr(e,'data-icon'),attr(e,'data-testid'),attr(e,'aria-label')].join(' ')));
+ if(checks.length)return {selected:true,reason:'check-icon'};
+ // Require both the selected row background and a small checked black square.
+ const rowColor=getComputedStyle(row).backgroundColor;
+ const checkedSquares=[...row.querySelectorAll('div,span')].filter(e=>{
+  if(!shown(e))return false;
+  const r=e.getBoundingClientRect();
+  if(r.width<15||r.width>27||r.height<15||r.height>27)return false;
+  const c=getComputedStyle(e).backgroundColor.match(/[\d.]+/g)?.map(Number)||[];
+  return c.length>=3&&(c.length<4||c[3]>.5)&&c[0]+c[1]+c[2]<230&&
+   (e.querySelector('svg,path')||/✓|✔/.test(e.textContent||''));
+ });
+ if(checkedSquares.length===1)return {selected:true,reason:'black-check'};
+ // The recipient chip at the foot of the dialog confirms a selected recipient.
+ const bottom=dialog.getBoundingClientRect().bottom;
+ const chips=[...dialog.querySelectorAll('[title],[aria-label],span[dir="auto"]')].filter(shown).filter(e=>{
+  const box=e.getBoundingClientRect();
+  return box.top>bottom-100&&lexical(attr(e,'title')||attr(e,'aria-label')||e.textContent)===lexical(target);
+ });
+ if(chips.length===1&&rowColor)return {selected:true,reason:'recipient-chip'};
+ return {selected:false,reason:'not-confirmed'};
 }
 function forwardConfirm(dialog){
- const elems=[...dialog.querySelectorAll('button,[role="button"],[aria-label],[data-icon]')].filter(shown);
- const options=[...new Set(elems.map(e=>e.closest('button,[role="button"]')||e))].filter(e=>{
-  const txt=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),...([...e.querySelectorAll('[data-icon]')].map(x=>attr(x,'data-icon'))),e.textContent].join(' ');
-  return /^(?:\s*)(?:Forward|העבר|שלח|Send)(?:\s*)$/i.test(txt.trim())||
-   /\b(?:forward|send)\b/i.test([attr(e,'aria-label'),attr(e,'data-testid')].join(' '));
+ const controls=[...dialog.querySelectorAll('button,[role="button"],[aria-label],[data-testid],[data-icon]')].filter(shown);
+ const named=[...new Set(controls.map(e=>e.closest('button,[role="button"]')||e))].filter(e=>{
+  const meta=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),attr(e,'data-icon'),
+    ...[...e.querySelectorAll('[data-icon]')].map(x=>attr(x,'data-icon'))].join(' ');
+  if(/info|message-info|add|attach|close|cancel|בטל|סגור|הוסף/.test(meta))return false;
+  return /\b(?:forward|send)\b|(?:העבר|שלח)/i.test(meta);
  });
- return options.length===1?options[0]:null;
+ if(named.length===1)return named[0];
+ // Screenshot-confirmed final action: black circular forward arrow at dialog
+ // bottom-left. Do not pick it unless a single recipient is verified.
+ const bounds=dialog.getBoundingClientRect();
+ const circles=[...dialog.querySelectorAll('button,[role="button"]')].filter(shown).filter(e=>{
+  const r=e.getBoundingClientRect();
+  if(r.width<38||r.width>75||Math.abs(r.width-r.height)>12)return false;
+  if(r.left<bounds.left-10||r.left>bounds.left+105||r.bottom<bounds.bottom-105)return false;
+  const c=getComputedStyle(e).backgroundColor.match(/[\d.]+/g)?.map(Number)||[];
+  return c.length>=3&&(c.length<4||c[3]>.5)&&c[0]+c[1]+c[2]<235&&
+   (!!e.querySelector('svg,path,[data-icon]'));
+ });
+ return circles.length===1?circles[0]:null;
 }
 async function forwardLastTestMessage(source,target){
  if(source!==FORWARD_TEST_GROUP||target!==FORWARD_TEST_GROUP)
@@ -697,14 +756,14 @@ async function forwardLastTestMessage(source,target){
  if(search&&!readSearch(search).trim())setSearch(search,'פנימי שמעון נוה');
  for(let i=0;i<30;i++){
   const selection=forwardChoice(dialog,target);
-  if(selection){const selected=selection.matches('[aria-checked="true"],input:checked')||!!selection.querySelector('[aria-checked="true"],input:checked,[data-state="checked"]');if(!selected)humanClick(selection);break}
+  if(selection){if(!forwardSelectionState(dialog,selection,target).selected)humanClick(selection);break}
   await wait(170);
  }
  const chosen=forwardChoice(dialog,target);
  if(!chosen)throw Error('קבוצת היעד לא נמצאה בחלון ההעברה');
- const checked=chosen.matches('[aria-checked="true"],input:checked')||
-  !!chosen.querySelector('[aria-checked="true"],input:checked,[data-state="checked"]');
- if(!checked)throw Error('לא ניתן לאמת שקבוצת הבדיקות נבחרה כיעד');
+ await wait(250);
+ const selectedState=forwardSelectionState(dialog,chosen,target);
+ if(!selectedState.selected)throw Error('לא ניתן לאמת שקבוצת הבדיקות נבחרה כיעד (סימון לא זוהה)');
  const confirm=forwardConfirm(dialog);
  if(!confirm)throw Error('כפתור אישור ההעברה לא נמצא באופן חד-משמעי');
  if(!currentMatches(source))throw Error('קבוצת המקור השתנתה לפני אישור ההעברה');
@@ -714,11 +773,11 @@ async function forwardLastTestMessage(source,target){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V043'){reply({ok:true,version:'0.4.3',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V043'&&msg?.type!=='FORWARD_TEST_V043')return;
+ if(msg?.type==='WA_TEST_PING_V044'){reply({ok:true,version:'0.4.4',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V044'&&msg?.type!=='FORWARD_TEST_V044')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='FORWARD_TEST_V043'
+ const promise=msg.type==='FORWARD_TEST_V044'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
