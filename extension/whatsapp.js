@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV051)return;
-globalThis.__naharSchedulerAgentV051=true;
+if(globalThis.__naharSchedulerAgentV052)return;
+globalThis.__naharSchedulerAgentV052=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -798,15 +798,17 @@ function forwardConfirmDiagnostics(inner){
 function forwardConfirm(inner){
  return findForwardArrow(inner);
 }
-async function forwardLastTestMessage(source,target){
+async function forwardLastTestMessage(source,target,expectedRow=null){
  if(source!==FORWARD_TEST_GROUP||target!==FORWARD_TEST_GROUP)
   throw Error('ניסיון העברה מורשה רק מאותה קבוצת בדיקות אל עצמה');
  if(messageInfoOpen())throw Error('חלונית פרטי הודעה פתוחה — סגור אותה לפני ניסוי העברה');
  await openGroup(source);
  if(!currentMatches(source))throw Error('קבוצת המקור לא אומתה');
  await scrollChatBottom();
- const row=await lastOutgoing();
- if(!row)throw Error('לא נמצאה הודעה יוצאת בקבוצת הבדיקות. '+outgoingDiagnostic());
+ const row=expectedRow||await lastOutgoing();
+ if(!row||!row.isConnected)throw Error('לא נמצאה הודעה יוצאת בקבוצת הבדיקות. '+outgoingDiagnostic());
+ if(expectedRow&&outgoingRows().at(-1)!==expectedRow)
+  throw Error('נוספה הודעה נוספת לאחר השליחה — לא נבצע העברה של הודעה שאינה מזוהה');
  const knownId=row.getAttribute('data-id')||row.querySelector('[data-id]')?.getAttribute('data-id')||'';
  if(!outgoingProof(row))
   throw Error('לא ניתן להוכיח שההודעה האחרונה היא הודעה שנשלחה מאיתנו');
@@ -858,12 +860,43 @@ async function forwardLastTestMessage(source,target){
  if(forwardingDialog())throw Error('חלון ההעברה עדיין פתוח — אין אישור שההעברה בוצעה');
  return {ok:true};
 }
+
+// Combined test: only forward the *new* outgoing message produced by this
+// very attempt. Never forward an older message when the send hasn't appeared.
+async function sendThenForwardTest(text,attachment,group,target){
+ if(group!==FORWARD_TEST_GROUP||target!==FORWARD_TEST_GROUP)
+  throw Error('שליחה והעברה משולבת מורשית לקבוצת הבדיקות בלבד');
+ await openGroup(group);
+ if(!currentMatches(group))throw Error('קבוצת הבדיקות לא אומתה לפני השליחה');
+ await scrollChatBottom();
+ const previous=new Set(outgoingRows());
+ const sent=await send(text,group,attachment);
+ if(!sent?.ok)throw Error('שליחת ההודעה לא אושרה — לא תבוצע העברה');
+ let newest=null;
+ for(let i=0;i<55;i++){
+  await wait(230);
+  if(!currentMatches(group))throw Error('השיחה השתנתה לאחר השליחה — ההעברה בוטלה');
+  const latest=outgoingRows().at(-1);
+  if(latest&&!previous.has(latest)){newest=latest;break}
+ }
+ if(!newest)throw Error('השליחה בוצעה, אך ההודעה החדשה לא זוהתה בשיחה — לא העברתי הודעה ישנה');
+ await wait(500);
+ // Existing, tested forwarding sequence remains untouched except for pinning
+ // the exact newly-created message instead of selecting a historical "last".
+ try{
+  const forwarded=await forwardLastTestMessage(group,target,newest);
+  if(!forwarded?.ok)throw Error('ניסיון ההעברה לא אושר');
+  return {ok:true,detail:'בוצעו שליחה והעברה; יש לאמת שתי הודעות בקבוצה'};
+ }catch(e){throw Error('השליחה בוצעה, אך ההעברה נכשלה: '+String(e.message||e))}
+}
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V051'){reply({ok:true,version:'0.5.1',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V051'&&msg?.type!=='FORWARD_TEST_V051')return;
+ if(msg?.type==='WA_TEST_PING_V052'){reply({ok:true,version:'0.5.2',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(!['SEND_TEST_V052','FORWARD_TEST_V052','SEND_FORWARD_TEST_V052'].includes(msg?.type))return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='FORWARD_TEST_V051'
+ const promise=msg.type==='SEND_FORWARD_TEST_V052'
+  ?sendThenForwardTest(msg.text,msg.attachment,msg.group,msg.target)
+  :msg.type==='FORWARD_TEST_V052'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
