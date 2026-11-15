@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV053)return;
-globalThis.__naharSchedulerAgentV053=true;
+if(globalThis.__naharSchedulerAgentV054)return;
+globalThis.__naharSchedulerAgentV054=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -861,94 +861,37 @@ async function forwardLastTestMessage(source,target,expectedRow=null){
  return {ok:true};
 }
 
-// Combined test: identify the new message by its actual content and DOM
-// insertion, not by counting outgoingRows() (some builds reuse one wrapper).
-function outgoingMarkers(){
- const main=document.querySelector('#main');
- return new Set(main?[...main.querySelectorAll('.message-out,[data-id^="true_"],[data-id^="true-"],[data-testid="msg-container"],[data-testid="message-container"]')]:[]);
-}
-function lastRowContent(row){
- if(!row)return '';
- const text=[...row.querySelectorAll('[data-testid="msg-text"],[class*="copyable-text"],[class*="selectable-text"],span[dir="ltr"],span[dir="rtl"]')];
- return norm(text.length?text.map(x=>x.innerText||'').join(' '):row.innerText||'');
-}
-function snapshotLastOutgoing(){
- const row=outgoingRows().at(-1);
- if(!row)return {row:null,content:'',ids:[],html:''};
- const ids=[attr(row,'data-id'),...[...row.querySelectorAll('[data-id]')].map(x=>attr(x,'data-id'))].filter(Boolean);
- const content=lastRowContent(row);
- // Compare only last-message detail (not dynamic delivery ticks).
- return {row,content,ids};
-}
-function freshOutgoingCandidate(before,expectedText,added){
- const row=outgoingRows().at(-1);
- if(!row||!outgoingProof(row))return null;
- const after=snapshotLastOutgoing();
- const newId=after.ids.some(x=>!before.ids.includes(x));
- const changedContent=!!expectedText.trim()&&after.content.includes(norm(expectedText))&&
-  (!before.content.includes(norm(expectedText))||!before.row?.isConnected);
- const newMessageNode=added.some(n=>n.isConnected&&
-  (n===row||row.contains(n)||n.contains(row))&&
-  (n.matches?.('.message-out,[data-id^="true_"],[data-id^="true-"],[data-testid="msg-container"],[data-testid="message-container"]')||
-   !!n.querySelector?.('.message-out,[data-id^="true_"],[data-id^="true-"],[data-testid="msg-container"],[data-testid="message-container"],[data-testid="msg-text"],[class*="copyable-text"]')));
- // Evidence must be meaningful: a changed bubble/message identifier or the
- // newly-sent text now at the end. Never accept delivery-status changes alone.
- if(newId||(changedContent&&(newMessageNode||after.content!==before.content)))return row;
- // For media with no caption, the attachment's NEW media preview must be
- // present inside the outgoing message after the send.
- if(!expectedText.trim()&&newMessageNode&&row!==before.row&&
-   row.querySelector('img[src^="blob:"],video,canvas,[data-testid*="media"]'))return row;
- return null;
-}
+// Reuse the two independently tested workflows without brittle DOM
+// count/content/attachment matching between them.
 async function sendThenForwardTest(text,attachment,group,target){
  if(group!==FORWARD_TEST_GROUP||target!==FORWARD_TEST_GROUP)
   throw Error('שליחה והעברה משולבת מורשית לקבוצת הבדיקות בלבד');
  await openGroup(group);
  if(!currentMatches(group))throw Error('קבוצת הבדיקות לא אומתה לפני השליחה');
- await scrollChatBottom();
- const baseline=snapshotLastOutgoing();
- const added=[];
- const main=document.querySelector('#main');
- if(!main)throw Error('אזור שיחה חסר לפני הבדיקה המשולבת');
- const observer=new MutationObserver(list=>{
-  for(const m of list)for(const node of m.addedNodes){
-   if(node.nodeType===1&&added.length<350)added.push(node);
-  }
- });
- observer.observe(main,{childList:true,subtree:true});
- let sent;
- try{sent=await send(text,group,attachment)}
- catch(e){observer.disconnect();throw e}
- if(!sent?.ok){observer.disconnect();throw Error('שליחת ההודעה לא אושרה — לא תבוצע העברה')}
- let newest=null;
- for(let i=0;i<65;i++){
-  await wait(220);
-  if(!currentMatches(group)){observer.disconnect();throw Error('השיחה השתנתה לאחר השליחה — ההעברה בוטלה')}
-  newest=freshOutgoingCandidate(baseline,text,added);
-  if(newest)break;
+ const sent=await send(text,group,attachment);
+ if(!sent?.ok)throw Error('שליחת ההודעה לא אושרה — לא תבוצע העברה');
+ await wait(2200);
+ if(!currentMatches(group))throw Error('קבוצת הבדיקות השתנתה לאחר השליחה — ההעברה בוטלה');
+ if(!attachment){
+  const field=composer();
+  if(field&&norm(field.innerText))throw Error('הטקסט עדיין נמצא בשדה ההקלדה — לא תבוצע העברה');
  }
- observer.disconnect();
- if(!newest)throw Error('השליחה בוצעה, אך לא זוהתה הודעה יוצאת חדשה לפי תוכן/מזהה — לא בוצעה העברה של הודעה ישנה');
- await wait(400);
  try{
-  // Existing proven forwarding workflow; the verified candidate must still
-  // be the latest outgoing bubble when the forwarding menu is opened.
-  const latest=outgoingRows().at(-1);
-  if(!latest||(!latest.isSameNode(newest)&&lastRowContent(latest)!==lastRowContent(newest)))
-   throw Error('זיהוי ההודעה השתנה לפני ההעברה');
-  const forwarded=await forwardLastTestMessage(group,target,latest);
+  const forwarded=await forwardLastTestMessage(group,target);
   if(!forwarded?.ok)throw Error('ניסיון ההעברה לא אושר');
   return {ok:true,detail:'בוצעו שליחה והעברה; יש לאמת שתי הודעות בקבוצה'};
- }catch(e){throw Error('השליחה בוצעה, אך ההעברה נכשלה: '+String(e.message||e))}
+ }catch(e){
+  throw Error('השליחה בוצעה, אך ההעברה נכשלה: '+String(e.message||e));
+ }
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V053'){reply({ok:true,version:'0.5.3',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(!['SEND_TEST_V053','FORWARD_TEST_V053','SEND_FORWARD_TEST_V053'].includes(msg?.type))return;
+ if(msg?.type==='WA_TEST_PING_V054'){reply({ok:true,version:'0.5.4',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(!['SEND_TEST_V054','FORWARD_TEST_V054','SEND_FORWARD_TEST_V054'].includes(msg?.type))return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='SEND_FORWARD_TEST_V053'
+ const promise=msg.type==='SEND_FORWARD_TEST_V054'
   ?sendThenForwardTest(msg.text,msg.attachment,msg.group,msg.target)
-  :msg.type==='FORWARD_TEST_V053'
+  :msg.type==='FORWARD_TEST_V054'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
