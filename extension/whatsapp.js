@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV041)return;
-globalThis.__naharSchedulerAgentV041=true;
+if(globalThis.__naharSchedulerAgentV042)return;
+globalThis.__naharSchedulerAgentV042=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -506,23 +506,74 @@ async function send(text,name,attachment){
 
 const FORWARD_TEST_GROUP='🏷️ פנימי שמעון נוה 🔖';
 function forwardVisible(e){return shown(e)&&getComputedStyle(e).pointerEvents!=='none'}
+function messageIdentity(node){
+ const attrId=attr(node,'data-id');
+ const msg=node.closest('.message-out,.message-in,[data-id],[data-testid="msg-container"]')||node;
+ const classes=[...msg.classList];
+ const ownOutgoing=msg.classList.contains('message-out')||msg.querySelector('.message-out')!==null||
+  /^true[_-]/i.test(attrId)||!!msg.querySelector('[data-id^="true_"],[data-id^="true-"]');
+ const ownIncoming=msg.classList.contains('message-in')||/^false[_-]/i.test(attrId);
+ return {ownOutgoing,ownIncoming,classes};
+}
 function outgoingRows(){
  const main=document.querySelector('#main');
  if(!main)return [];
- const nodes=[...main.querySelectorAll('[data-id^="true_"],.message-out,[data-testid="msg-container"]')];
- const results=[];
- for(const node of nodes){
-  const root=node.closest('.message-out')||node;
-  if(!root.classList.contains('message-out')&&!String(root.getAttribute('data-id')||'').startsWith('true_')&&
-   !root.querySelector('[data-id^="true_"]'))continue;
-  if(root.closest('header,footer')||results.includes(root))continue;
-  results.push(root);
+ // WhatsApp chat messages may be rendered under wrappers without data-id.
+ // Match the actual message-out bubble and ascend only to the message row.
+ const selectors=['.message-out','[data-id^="true_"]','[data-id^="true-"]','[data-testid="msg-container"]','[data-testid*="message"]'];
+ const roots=[...main.querySelectorAll(selectors.join(','))];
+ const unique=[];
+ for(const element of roots){
+  if(element.closest('header,footer,[role="dialog"]'))continue;
+  const row=element.closest('.message-out')||
+   (element.matches('[data-id^="true_"],[data-id^="true-"]')?element:
+    element.querySelector('.message-out,[data-id^="true_"],[data-id^="true-"]')?element:null);
+  if(!row)continue;
+  const id=messageIdentity(row);
+  if(!id.ownOutgoing||id.ownIncoming)continue;
+  if(unique.some(e=>e===row||e.contains(row)))continue;
+  unique.push(row);
  }
- return results;
+ // Only consider actual message bubbles in document order.
+ return unique;
 }
-function lastOutgoing(){
- const rows=outgoingRows();
- return rows.at(-1)||null;
+function outgoingDiagnostic(){
+ const m=document.querySelector('#main');
+ if(!m)return 'אין אזור שיחה';
+ const sample=[...m.querySelectorAll('[data-id],.message-out,.message-in,[data-testid="msg-container"]')];
+ const outgoing=sample.filter(e=>e.classList.contains('message-out')).length;
+ const incoming=sample.filter(e=>e.classList.contains('message-in')).length;
+ const trueIds=sample.filter(e=>/^true[_-]/i.test(attr(e,'data-id'))).length;
+ const falseIds=sample.filter(e=>/^false[_-]/i.test(attr(e,'data-id'))).length;
+ return 'רכיבי הודעה '+sample.length+', יוצאות '+outgoing+', נכנסות '+incoming+
+  ', מזהי יוצאות '+trueIds+', מזהי נכנסות '+falseIds+', שורות מזוהות '+outgoingRows().length;
+}
+async function scrollChatBottom(){
+ const main=document.querySelector('#main');
+ if(!main)return;
+ const all=[...main.querySelectorAll('*')];
+ const scrollables=all.filter(e=>{
+  if(!shown(e))return false;
+  const style=getComputedStyle(e),y=style.overflowY;
+  return e.scrollHeight>e.clientHeight+70&&/auto|scroll/.test(y)&&
+    e.clientHeight>200;
+ }).sort((a,b)=>b.scrollHeight-b.clientHeight-(a.scrollHeight-a.clientHeight));
+ // Prefer the message list container, not the entire page or sidebar.
+ const panel=scrollables[0]||null;
+ if(panel){panel.scrollTop=panel.scrollHeight;panel.dispatchEvent(new Event('scroll',{bubbles:true}));}
+ const bottom=[...main.querySelectorAll('[data-icon="chevron-down"],[data-icon="down"],[aria-label*="latest" i],[aria-label*="למטה"],[aria-label*="האחרונה"]')]
+  .filter(shown).filter(e=>!e.closest('footer,header'));
+ if(bottom.length===1){const button=bottom[0].closest('button,[role="button"]')||bottom[0];humanClick(button);}
+ await wait(500);
+}
+async function lastOutgoing(){
+ for(let i=0;i<5;i++){
+  const rows=outgoingRows();
+  if(rows.length){const last=rows.at(-1);last.scrollIntoView({block:'center'});await wait(160);return last;}
+  await scrollChatBottom();
+  await wait(350);
+ }
+ return null;
 }
 function expectedForwardMenu(){
  const items=[...document.querySelectorAll('[role="menuitem"],[role="menu"] [role="button"],[data-testid*="menu-item"]')].filter(forwardVisible);
@@ -589,10 +640,11 @@ async function forwardLastTestMessage(source,target){
  if(messageInfoOpen())throw Error('חלונית פרטי הודעה פתוחה — סגור אותה לפני ניסוי העברה');
  await openGroup(source);
  if(!currentMatches(source))throw Error('קבוצת המקור לא אומתה');
- const row=lastOutgoing();
- if(!row)throw Error('לא נמצאה הודעה יוצאת אחרונה בקבוצת הבדיקות');
+ await scrollChatBottom();
+ const row=await lastOutgoing();
+ if(!row)throw Error('לא נמצאה הודעה יוצאת בקבוצת הבדיקות. '+outgoingDiagnostic());
  const knownId=row.getAttribute('data-id')||row.querySelector('[data-id]')?.getAttribute('data-id')||'';
- if(!row.classList.contains('message-out')&&!knownId.startsWith('true_'))
+ if(!row.classList.contains('message-out')&&!knownId.startsWith('true_')&&!knownId.startsWith('true-'))
   throw Error('לא ניתן להוכיח שההודעה האחרונה היא הודעה שנשלחה מאיתנו');
  await openForwardFromMessage(row);
  let dialog=null;
@@ -633,11 +685,11 @@ async function forwardLastTestMessage(source,target){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V041'){reply({ok:true,version:'0.4.1',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V041'&&msg?.type!=='FORWARD_TEST_V041')return;
+ if(msg?.type==='WA_TEST_PING_V042'){reply({ok:true,version:'0.4.2',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V042'&&msg?.type!=='FORWARD_TEST_V042')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='FORWARD_TEST_V041'
+ const promise=msg.type==='FORWARD_TEST_V042'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
