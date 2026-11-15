@@ -152,7 +152,7 @@ function getComposerVariants(e){
 async function fillComposer(e,text){
  const original=String(text).replace(/\r\n?/g,'\n');
  const expected=messageCanonical(original);
- const read=()=>getComposerVariants(composer()||e).map(messageCanonical);
+ const read=()=>getComposerVariants(e).map(messageCanonical);
  const matches=()=>read().some(v=>v===expected);
  if(read().some(Boolean))throw Error('קיימת כבר טיוטה בשדה הכתיבה — לא שיניתי אותה');
  // Ensure selection is inside the actual contenteditable editor, not a placeholder wrapper.
@@ -172,7 +172,7 @@ async function fillComposer(e,text){
   const actual=read()[0]||'';
   throw Error('הטקסט הוקלד אך אינו תואם למקור — עצרתי לפני שליחה (מקור '+expected.length+' תווים, בפועל '+actual.length+')');
  }
- const live=composer();
+ const live=e.closest('#main footer')?composer():e;
  if(!live||!currentMatches(activeSendingGroup))throw Error('שדה הכתיבה או השיחה השתנו בעת ההקלדה');
  live.focus();
  const selection=document.getSelection(),r=document.createRange();
