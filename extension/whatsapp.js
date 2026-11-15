@@ -869,17 +869,19 @@ async function sendThenForwardTest(text,attachment,group,target){
  await openGroup(group);
  if(!currentMatches(group))throw Error('קבוצת הבדיקות לא אומתה לפני השליחה');
  await scrollChatBottom();
- const previous=new Set(outgoingRows());
+ const beforeRows=outgoingRows();
+ const previous=new Set(beforeRows);
+ const beforeCount=beforeRows.length;
  const sent=await send(text,group,attachment);
  if(!sent?.ok)throw Error('שליחת ההודעה לא אושרה — לא תבוצע העברה');
  let newest=null;
  for(let i=0;i<55;i++){
   await wait(230);
   if(!currentMatches(group))throw Error('השיחה השתנתה לאחר השליחה — ההעברה בוטלה');
-  const latest=outgoingRows().at(-1);
-  if(latest&&!previous.has(latest)){newest=latest;break}
+  const current=outgoingRows(),latest=current.at(-1);
+  if(current.length>beforeCount&&latest&&!previous.has(latest)){newest=latest;break}
  }
- if(!newest)throw Error('השליחה בוצעה, אך ההודעה החדשה לא זוהתה בשיחה — לא העברתי הודעה ישנה');
+ if(!newest)throw Error('השליחה בוצעה, אך לא אומת שנוספה הודעה יוצאת חדשה — לא העברתי הודעה ישנה');
  await wait(500);
  // Existing, tested forwarding sequence remains untouched except for pinning
  // the exact newly-created message instead of selecting a historical "last".
