@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV046)return;
-globalThis.__naharSchedulerAgentV046=true;
+if(globalThis.__naharSchedulerAgentV047)return;
+globalThis.__naharSchedulerAgentV047=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -659,56 +659,90 @@ function forwardingDialog(){
 }
 function forwardChoice(dialog,target){
  const wanted=lexical(target);
- const candidates=[...dialog.querySelectorAll('[title],[aria-label],span[dir="auto"]')].filter(shown)
+ const nodes=[...dialog.querySelectorAll('[title],[aria-label],span[dir="auto"]')].filter(shown)
   .filter(e=>lexical(attr(e,'title')||attr(e,'aria-label')||(e.children.length?'':e.textContent))===wanted);
- if(!candidates.length)return null;
- // Name may be a nested span; use the visible whole chat result, not its text span.
- const rows=candidates.map(e=>{
-  let p=e;
-  for(let i=0;i<7&&p&&p!==dialog;i++,p=p.parentElement){
-   const r=p.getBoundingClientRect();
-   if(r.width>=240&&r.height>=48&&r.height<=140&&
-      (p.querySelector('[role="checkbox"],input[type="checkbox"],[data-icon*="check"],svg')||
-       p.matches('[role="row"],[data-testid*="cell"]')))return p;
+ const rows=[];
+ for(const name of nodes){
+  let p=name;
+  for(let i=0;i<10&&p&&p!==dialog;i++,p=p.parentElement){
+   const r=p.getBoundingClientRect(),d=dialog.getBoundingClientRect();
+   // The clickable recipient row is a full-width, ~70px-high region.
+   if(r.width>=Math.min(225,d.width*.48)&&r.height>=48&&r.height<=120&&
+     r.top>d.top+75&&r.bottom<d.bottom-110){
+     if(!rows.includes(p))rows.push(p);
+   }
   }
-  return e.closest('[role="row"],[data-testid*="cell"],[tabindex]')||e;
- });
- const distinct=[...new Set(rows)].filter(shown);
- // Prefer the smallest row containing checkbox graphics.
- distinct.sort((x,y)=>x.getBoundingClientRect().height-y.getBoundingClientRect().height);
- if(distinct.length>1&&!distinct[0].contains(distinct[1])&&!distinct[1].contains(distinct[0]))return null;
- return distinct[0]||null;
+ }
+ if(!rows.length)return null;
+ // Choose the outermost row that still fits a single chat item, not the name span.
+ rows.sort((x,y)=>y.getBoundingClientRect().width-x.getBoundingClientRect().width);
+ const best=rows[0];
+ if(rows.some(e=>e!==best&&!best.contains(e)&&!e.contains(best)))return null;
+ return best;
 }
 function forwardSelectionState(dialog,row,target){
  if(!row||!shown(row))return {selected:false,reason:'no-row'};
- const checkboxes=[row,...row.querySelectorAll('[role="checkbox"],input[type="checkbox"],[aria-checked],[data-state]')];
- if(checkboxes.some(e=>e.checked===true||attr(e,'aria-checked')==='true'||attr(e,'data-state')==='checked'))
-  return {selected:true,reason:'checkbox'};
- // In the screenshot WhatsApp renders the checked target as a black box
- // with a white check mark; the control often lacks semantic checkbox attributes.
- const icons=[...row.querySelectorAll('[data-icon],svg')].filter(shown);
- const checks=icons.filter(e=>/(?:check|tick|selected)/i.test(
-  [attr(e,'data-icon'),attr(e,'data-testid'),attr(e,'aria-label')].join(' ')));
- if(checks.length)return {selected:true,reason:'check-icon'};
- // Require both the selected row background and a small checked black square.
- const rowColor=getComputedStyle(row).backgroundColor;
- const checkedSquares=[...row.querySelectorAll('div,span')].filter(e=>{
-  if(!shown(e))return false;
-  const r=e.getBoundingClientRect();
-  if(r.width<15||r.width>27||r.height<15||r.height>27)return false;
-  const c=getComputedStyle(e).backgroundColor.match(/[\d.]+/g)?.map(Number)||[];
-  return c.length>=3&&(c.length<4||c[3]>.5)&&c[0]+c[1]+c[2]<230&&
-   (e.querySelector('svg,path')||/✓|✔/.test(e.textContent||''));
+ const r=row.getBoundingClientRect(),d=dialog.getBoundingClientRect();
+ const normalized=lexical(target);
+ const names=[...row.querySelectorAll('[title],[aria-label],span[dir="auto"]')].filter(shown)
+  .filter(e=>lexical(attr(e,'title')||attr(e,'aria-label')||(e.children.length?'':e.textContent))===normalized);
+ if(!names.length)return {selected:false,reason:'wrong-target'};
+ const controls=[...dialog.querySelectorAll('input[type="checkbox"],[role="checkbox"],[aria-checked],[data-state],svg,[data-icon],div,span')].filter(shown)
+  .filter(e=>{
+   const b=e.getBoundingClientRect();
+   // Checkbox sits at the far RIGHT end of the same recipient row in RTL UI.
+   return b.height>=12&&b.height<=35&&b.width>=12&&b.width<=35&&
+     Math.abs((b.top+b.bottom)/2-(r.top+r.bottom)/2)<20&&
+     b.left>r.right-90&&b.right<=d.right+5;
+  });
+ const semantic=controls.some(e=>e.checked===true||attr(e,'aria-checked')==='true'||attr(e,'data-state')==='checked');
+ if(semantic)return {selected:true,reason:'checked-attribute'};
+ const visual=controls.filter(e=>{
+  const css=getComputedStyle(e),m=css.backgroundColor.match(/rgba?\(([^)]+)\)/i);
+  const rgb=m?.[1].split(',').map(Number)||[];
+  const dark=rgb.length>=3&&(rgb.length===3||rgb[3]>.75)&&rgb.slice(0,3).every(v=>v<80);
+  const check=!!e.querySelector('svg,path,polyline')||/✓|✔/.test(e.textContent||'')||
+   /check|tick|selected/i.test([attr(e,'data-icon'),attr(e,'aria-label'),attr(e,'data-testid')].join(' '));
+  return dark&&check;
  });
- if(checkedSquares.length===1)return {selected:true,reason:'black-check'};
- // The recipient chip at the foot of the dialog confirms a selected recipient.
- const bottom=dialog.getBoundingClientRect().bottom;
- const chips=[...dialog.querySelectorAll('[title],[aria-label],span[dir="auto"]')].filter(shown).filter(e=>{
-  const box=e.getBoundingClientRect();
-  return box.top>bottom-100&&lexical(attr(e,'title')||attr(e,'aria-label')||e.textContent)===lexical(target);
+ if(visual.length)return {selected:true,reason:'visual-check'};
+ // Nested SVG with check may have a transparent background, but it must live
+ // inside a dark checkbox parent in the row's checkbox region.
+ const icon=controls.some(e=>/check|tick|selected/i.test([attr(e,'data-icon'),attr(e,'data-testid')].join(' '))&&
+  [...(function*(n){for(let p=n;p&&p!==dialog;p=p.parentElement)yield p})(e)].some(p=>{
+   const pRect=p.getBoundingClientRect(),color=getComputedStyle(p).backgroundColor;
+   const rgb=color.match(/rgba?\(([^)]+)\)/i)?.[1].split(',').map(Number)||[];
+   return pRect.width>=15&&pRect.width<=30&&rgb.length>=3&&rgb.slice(0,3).every(x=>x<80);
+  }));
+ if(icon)return {selected:true,reason:'dark-check-icon'};
+ // The footer recipient chip is additional evidence, but never alone proves
+ // a checkbox selection: it must refer to the exact target.
+ const chip=[...dialog.querySelectorAll('[title],[aria-label],span[dir="auto"]')].filter(shown).some(e=>{
+  const b=e.getBoundingClientRect();
+  return b.top>d.bottom-75&&lexical(attr(e,'title')||attr(e,'aria-label')||e.textContent)===normalized;
  });
- if(chips.length===1&&rowColor)return {selected:true,reason:'recipient-chip'};
- return {selected:false,reason:'not-confirmed'};
+ if(chip&&controls.some(e=>attr(e,'aria-checked')==='true'))return {selected:true,reason:'chip-plus-checked'};
+ return {selected:false,reason:'not-confirmed; checkbox-candidates '+controls.length};
+}
+async function stableForwardDialog(minSamples=3){
+ let previous=null,count=0;
+ for(let i=0;i<45;i++){
+  const d=forwardingDialog();
+  if(d){
+   const r=d.getBoundingClientRect();
+   // Ignore the transient scaled-down transform from WhatsApp's open animation.
+   const transform=getComputedStyle(d).transform;
+   const stableSize=r.width>=355&&r.width<=700&&r.height>=490&&r.height<=window.innerHeight+30;
+   const stablePosition=r.left>window.innerWidth*.15&&r.right<window.innerWidth*.85;
+   const steady=previous&&Math.abs(previous.width-r.width)<2&&Math.abs(previous.height-r.height)<2&&
+     Math.abs(previous.left-r.left)<2&&Math.abs(previous.top-r.top)<2;
+   if(stableSize&&stablePosition&&steady)count++;else count=0;
+   if(count>=minSamples)return d;
+   previous={width:r.width,height:r.height,left:r.left,top:r.top,transform};
+  }else{previous=null;count=0}
+  await wait(150);
+ }
+ return null;
 }
 function forwardConfirm(dialog){
  const bounds=dialog.getBoundingClientRect();
@@ -797,18 +831,28 @@ async function forwardLastTestMessage(source,target){
   for(let i=0;i<18;i++){dialog=forwardingDialog();if(dialog)break;await wait(180)}
  }
  if(!dialog)throw Error('חלון בחירת יעד להעברה לא נפתח');
+ dialog=await stableForwardDialog();
+ if(!dialog)throw Error('חלון ההעברה לא התייצב בגודל מלא — בוטלה ההעברה');
  const search=[...dialog.querySelectorAll('input,[contenteditable="true"],[role="textbox"]')].find(shown);
  if(search&&!readSearch(search).trim())setSearch(search,'פנימי שמעון נוה');
- for(let i=0;i<30;i++){
-  const selection=forwardChoice(dialog,target);
-  if(selection){if(!forwardSelectionState(dialog,selection,target).selected)humanClick(selection);break}
-  await wait(170);
+ let chosen=null,selectedState={selected:false,reason:'not-found'},clicked=false;
+ for(let i=0;i<35;i++){
+  dialog=await stableForwardDialog(1)||dialog;
+  chosen=forwardChoice(dialog,target);
+  if(chosen){
+   selectedState=forwardSelectionState(dialog,chosen,target);
+   if(selectedState.selected)break;
+   if(!clicked){
+    // The checkbox itself may be separate from the name span; click full row once.
+    humanClick(chosen);clicked=true;
+   }
+  }
+  await wait(180);
  }
- const chosen=forwardChoice(dialog,target);
- if(!chosen)throw Error('קבוצת היעד לא נמצאה בחלון ההעברה');
- await wait(250);
- const selectedState=forwardSelectionState(dialog,chosen,target);
- if(!selectedState.selected)throw Error('לא ניתן לאמת שקבוצת הבדיקות נבחרה כיעד (סימון לא זוהה)');
+ dialog=await stableForwardDialog(2);
+ chosen=dialog&&forwardChoice(dialog,target);
+ selectedState=chosen?forwardSelectionState(dialog,chosen,target):{selected:false,reason:'recipient-not-found'};
+ if(!selectedState.selected)throw Error('קבוצת הבדיקות לא אומתה כמסומנת — '+selectedState.reason);
  const confirm=forwardConfirm(dialog);
  if(!confirm)throw Error('כפתור אישור ההעברה לא זוהה. חלון: '+Math.round(dialog.getBoundingClientRect().width)+'x'+Math.round(dialog.getBoundingClientRect().height));
  if(!currentMatches(source))throw Error('קבוצת המקור השתנתה לפני אישור ההעברה');
@@ -818,11 +862,11 @@ async function forwardLastTestMessage(source,target){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V046'){reply({ok:true,version:'0.4.6',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V046'&&msg?.type!=='FORWARD_TEST_V046')return;
+ if(msg?.type==='WA_TEST_PING_V047'){reply({ok:true,version:'0.4.7',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V047'&&msg?.type!=='FORWARD_TEST_V047')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='FORWARD_TEST_V046'
+ const promise=msg.type==='FORWARD_TEST_V047'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
