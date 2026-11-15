@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV034)return;
-globalThis.__naharSchedulerAgentV034=true;
+if(globalThis.__naharSchedulerAgentV035)return;
+globalThis.__naharSchedulerAgentV035=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -190,11 +190,94 @@ function sendButton(){
  for(const e of m.querySelectorAll('[data-icon="send"],[data-icon="send-filled"]')){const b=e.closest('button,[role="button"]');if(shown(b))return b}
  return null;
 }
+function decodeAttachment(a){
+ if(!a||typeof a!=='object'||typeof a.name!=='string'||typeof a.data!=='string'||!Number.isInteger(a.size)||a.size<1||a.size>4*1024*1024)throw Error('קובץ הניסיון לא תקין');
+ if(!/^[A-Za-z0-9+/]+={0,2}$/.test(a.data)||a.data.length>5800000)throw Error('קידוד הקובץ לא תקין');
+ let binary;try{binary=atob(a.data)}catch{throw Error('פענוח הקובץ נכשל')}
+ if(binary.length!==a.size)throw Error('גודל הקובץ שהתקבל שונה מהמקור');
+ const buf=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)buf[i]=binary.charCodeAt(i);
+ return new File([buf],a.name,{type:a.type||'application/octet-stream'});
+}
+function attachButton(){
+ const root=document.querySelector('#main');if(!root)return null;
+ const selectors=['button[aria-label*="Attach" i]','button[aria-label*="צרף"]','button[title*="Attach" i]','button[title*="צרף"]','[data-testid="clip"]','[data-icon="plus"]','[data-icon="clip"]','[data-icon="attach-menu-plus"]'];
+ for(const sel of selectors)for(const el of root.querySelectorAll(sel)){const b=el.closest('button,[role="button"]')||el;if(shown(b)&&b.closest('footer'))return b}
+ return null;
+}
+function attachmentInput(file){
+ const all=[...document.querySelectorAll('input[type="file"]')];
+ const isMedia=/^(image|video)\//.test(file.type);
+ const capable=e=>{
+  const accept=attr(e,'accept').toLowerCase();
+  if(e.multiple&&accept.includes('image')&&!isMedia)return false;
+  if(isMedia)return accept.includes('image')||accept.includes('video')||accept==='';
+  return !accept||accept==='*'||accept.includes('application')||accept.includes('*/*')||accept.includes('*');
+ };
+ return all.find(e=>capable(e)&&!e.disabled)||null;
+}
+function previewRoot(){
+ const els=[...document.querySelectorAll('[data-testid="media-editor"],[data-testid="media-preview"],[data-testid="media-preview-dialog"],[role="dialog"],[data-testid="media-upload"]')].filter(shown);
+ return els.at(-1)||null;
+}
+function previewCaption(){
+ const roots=[previewRoot(),document.body].filter(Boolean);
+ for(const root of roots){
+  const els=[...root.querySelectorAll('[contenteditable="true"][role="textbox"],[contenteditable="true"][data-testid*="caption"],[contenteditable="true"][aria-label*="caption" i],[contenteditable="true"][aria-label*="כיתוב"]')]
+   .filter(shown).filter(e=>!e.closest('#main footer'));
+  if(els.length)return els.at(-1);
+ }
+ return null;
+}
+function previewSend(){
+ const root=previewRoot();
+ const selectors=['button[data-testid="media-send"]','[data-testid="send"]','button[aria-label*="send" i]','button[aria-label*="שלח"]','[data-icon="send"]','[data-icon="send-filled"]'];
+ const scopes=[root,document.body].filter(Boolean);
+ for(const scope of scopes)for(const sel of selectors){
+  for(const e of scope.querySelectorAll(sel)){
+   const b=e.closest('button,[role="button"]')||e;
+   if(!shown(b)||b.closest('#main footer'))continue;
+   if(root&&!root.contains(b)&&!b.closest('[role="dialog"],[data-testid*="media"]'))continue;
+   return b;
+  }
+ }
+ return null;
+}
+async function sendAttachment(attachment,text,name){
+ const file=decodeAttachment(attachment);
+ const existing=[...document.querySelectorAll('input[type="file"]')];
+ const attach=attachButton();
+ if(attach)humanClick(attach);
+ let input=null;
+ for(let i=0;i<20&&!input;i++){input=attachmentInput(file);if(!input)await wait(150)}
+ if(!input)throw Error('כפתור צירוף הקבצים של WhatsApp לא נמצא');
+ const dt=new DataTransfer();dt.items.add(file);
+ try{input.files=dt.files;input.dispatchEvent(new Event('change',{bubbles:true}))}
+ catch{throw Error('WhatsApp לא קיבל את הקובץ המצורף')}
+ let ready=false;
+ for(let i=0;i<35;i++){
+  await wait(220);
+  if(previewRoot()&&previewSend()){ready=true;break}
+ }
+ if(!ready)throw Error('הקובץ לא הופיע בתצוגת הצירוף; לא נשלח');
+ if(text.trim()){
+  const cap=previewCaption();
+  if(!cap)throw Error('לא נמצא שדה כיתוב לקובץ. הקובץ לא נשלח');
+  activeSendingGroup=name;
+  await fillComposer(cap,text);
+ }
+ if(!currentMatches(name))throw Error('קבוצת הבדיקות השתנתה לפני שליחת הקובץ — בוטל');
+ const button=previewSend();
+ if(!button)throw Error('כפתור שליחת הקובץ לא נמצא');
+ // Send the file once, with its caption if supplied. Do not send a separate text message.
+ button.click();
+ return {ok:true};
+}
 function metrics(){return {hasMain:!!document.querySelector('#main'),hasHeader:!!document.querySelector('#main header'),headerFields:Math.min(100,currentNames().length),hasSide:!!document.querySelector('#side'),hasSearch:!!searchBox(),hasEditor:!!composer()}}
-async function send(text,name){
- if(typeof name!=='string'||lexical(name).length<8||typeof text!=='string'||!text.trim())throw Error('נתוני יעד או הודעה לא תקינים');
+async function send(text,name,attachment){
+ if(typeof name!=='string'||lexical(name).length<8||typeof text!=='string'||(!text.trim()&&!attachment))throw Error('נתוני יעד או הודעה לא תקינים');
  await openGroup(name);
  if(!await waitForTarget(name,1000))throw Error('לא אומתה קבוצת הבדיקות לפני כתיבה');
+ if(attachment)return sendAttachment(attachment,text,name);
  const box=composer();if(!box)throw Error('שדה ההודעה לא נמצא');
  if(norm(box.innerText))throw Error('יש טיוטה קיימת, בוטל');
  activeSendingGroup=name;
@@ -206,11 +289,11 @@ async function send(text,name){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V034'){reply({ok:true,version:'0.3.4',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V034')return;
+ if(msg?.type==='WA_TEST_PING_V035'){reply({ok:true,version:'0.3.5',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V035')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- send(msg.text,msg.group).then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
+ send(msg.text,msg.group,msg.attachment).then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
  return true;
 });
 })();
