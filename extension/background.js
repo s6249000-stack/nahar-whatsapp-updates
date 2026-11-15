@@ -51,7 +51,7 @@ async function probeWhatsappTab(tab){
  for(let i=0;i<24;i++){
   try{
    let pong;
-   try{pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V034'});}
+   try{pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V035'});}
    catch(e){
     await chrome.scripting.executeScript({target:{tabId:tab.id},files:['whatsapp.js']});
     pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V034'});
@@ -79,10 +79,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse)=>{
   if(typeof job.group!=='string'||job.group.length<3||job.group.length>160||job.targets?.length!==1||job.targets[0]!=='test')throw Error('מותר יעד בדיקה יחיד בלבד');
   const pair=await chrome.storage.local.get(GROUP_LOCK);
   if(pair[GROUP_LOCK]&&pair[GROUP_LOCK]!==job.group)throw Error('נחסמה שליחה ליעד שונה מקבוצת הבדיקות שהוגדרה לראשונה');
-  if(typeof job.text!=='string'||!job.text.trim()||job.text.length>4000) throw Error('בדיקה זו תומכת רק בהודעת טקסט עד 4,000 תווים');
-  if(job.filename) throw Error('שליחת קבצים עדיין אינה נתמכת בתוסף הניסוי');
+  if(typeof job.text!=='string'||job.text.length>4000)throw Error('הטקסט חייב להיות קצר מ־4,000 תווים');
+  const a=job.attachment;
+  if(a!==null&&a!==undefined){
+   if(!a||typeof a!=='object'||typeof a.name!=='string'||a.name.length>180||/[\\/\x00-\x1f]/.test(a.name)||
+    typeof a.type!=='string'||a.type.length>100||!Number.isInteger(a.size)||a.size<1||a.size>4*1024*1024||
+    typeof a.data!=='string'||a.data.length>5800000||!/^[A-Za-z0-9+/]+={0,2}$/.test(a.data))
+    throw Error('הקובץ אינו תקין או גדול מ־4MB');
+  }
+  if(!job.text.trim()&&!a)throw Error('יש להזין הודעה או לצרף קובץ');
   if(!Number.isFinite(job.when) || job.when<Date.now()-15000 || job.when>Date.now()+30*86400000)throw Error('מועד התזמון אינו בטווח המותר');
-  const item={id:crypto.randomUUID(),attemptId:typeof job.attemptId==='string'&&/^[a-zA-Z0-9-]{8,40}$/.test(job.attemptId)?job.attemptId:crypto.randomUUID(),group:job.group,text:job.text,when:Math.max(job.when,Date.now()+250),phase:'scheduled'};
+  const item={id:crypto.randomUUID(),attemptId:typeof job.attemptId==='string'&&/^[a-zA-Z0-9-]{8,40}$/.test(job.attemptId)?job.attemptId:crypto.randomUUID(),group:job.group,text:job.text,attachment:a||null,when:Math.max(job.when,Date.now()+250),phase:'scheduled'};
   await chrome.storage.local.set({[GROUP_LOCK]:job.group});
   await chrome.storage.local.set({[JOB]:item});await setAlarm(item);await status('scheduled',new Date(item.when).toLocaleString('he-IL'));
   scheduleNearTerm(item);
@@ -116,11 +123,11 @@ async function sendDueJob(expectedId){
   await probeWhatsappTab(tab);
   // Exactly one send attempt; errors are not automatically retried to avoid duplicate WhatsApp messages.
   let result;
-  try{result=await chrome.tabs.sendMessage(tab.id,{type:'SEND_TEST_V034',group:job.group,text:job.text,id:job.id});}
+  try{result=await chrome.tabs.sendMessage(tab.id,{type:'SEND_TEST_V035',group:job.group,text:job.text,attachment:job.attachment,id:job.id});}
   catch(error){throw Error('חיבור התוסף ללשונית אבד בזמן השליחה: '+String(error?.message||error).slice(0,180));}
   if(!result)throw Error('WhatsApp Web לא החזיר תשובה מניסיון השליחה');
   if(!result.ok){const err=new Error(result.error||'השליחה לא אושרה');err.metrics=result.metrics;throw err;}
-  job.phase='attempted';await chrome.storage.local.set({[JOB]:job});await status('attempted','ניסיון שליחה בוצע; יש לבדוק בקבוצה שההודעה נראית');
+  job.phase='attempted';job.attachment=null;await chrome.storage.local.set({[JOB]:job});await status('attempted','ניסיון שליחה בוצע; יש לבדוק בקבוצה שההודעה נראית');
   /* Delivery status is reported via STATUS_TEST */
- }catch(e){await status('failed',String(e.message||e),e.metrics||{});const r=await chrome.storage.local.get(JOB);if(r[JOB]){r[JOB].phase='failed';r[JOB].error=String(e.message||e);await chrome.storage.local.set({[JOB]:r[JOB]});}/* Delivery status is reported via STATUS_TEST */}finally{ongoing=false}
+ }catch(e){await status('failed',String(e.message||e),e.metrics||{});const r=await chrome.storage.local.get(JOB);if(r[JOB]){r[JOB].phase='failed';r[JOB].attachment=null;r[JOB].error=String(e.message||e);await chrome.storage.local.set({[JOB]:r[JOB]});}/* Delivery status is reported via STATUS_TEST */}finally{ongoing=false}
 }
