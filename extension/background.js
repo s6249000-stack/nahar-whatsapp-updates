@@ -63,6 +63,90 @@ async function probeWhatsappTab(tab){
  }
  throw Error('WhatsApp Web לא נטען לאחר מעבר ללשונית. '+lastError.slice(0,180));
 }
+
+// File data is transferred in small chunks to extension IndexedDB, not as one Chrome
+// runtime message or a chrome.storage.local value. Browser storage availability is the only size limit.
+const FILE_DB='nahar-wa-scheduler-files-v1';
+let fileDbPromise;
+function fileDb(){
+ if(!fileDbPromise)fileDbPromise=new Promise((resolve,reject)=>{
+  const req=indexedDB.open(FILE_DB,1);
+  req.onupgradeneeded=()=>{const db=req.result;db.createObjectStore('meta');db.createObjectStore('chunks')};
+  req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
+ });
+ return fileDbPromise;
+}
+async function dbAction(store,mode,fn){
+ const db=await fileDb();
+ return new Promise((resolve,reject)=>{
+  const tx=db.transaction(store,mode),obj=tx.objectStore(store);
+  let result;
+  try{const r=fn(obj);r.onsuccess=()=>{result=r.result};r.onerror=()=>reject(r.error)}catch(e){reject(e);return}
+  tx.oncomplete=()=>resolve(result);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
+ });
+}
+const fileKey=(id,index)=>id+':'+String(index).padStart(8,'0');
+async function cleanUpload(id){
+ const meta=await dbAction('meta','readonly',s=>s.get(id));
+ if(meta)for(let i=0;i<meta.next;i++)await dbAction('chunks','readwrite',s=>s.delete(fileKey(id,i)));
+ await dbAction('meta','readwrite',s=>s.delete(id));
+}
+async function handleFileMessage(msg,sender){
+ const type=msg.type;
+ const isSite=sender.url?.startsWith('https://nahar-shalom-tools.pages.dev/tools/whatsapp-scheduler/');
+ const isWa=sender.url?.startsWith('https://web.whatsapp.com/');
+ if(type==='FILE_CHUNK_READ'){
+  if(!isWa)throw Error('הגישה לקובץ אינה מורשית');
+  const job=(await chrome.storage.local.get(JOB))[JOB];
+  if(job?.phase!=='processing'||job.attachment?.id!==msg.id)throw Error('אין קובץ מורשה לניסיון השליחה הפעיל');
+  const meta=await dbAction('meta','readonly',s=>s.get(msg.id));
+  if(!meta?.committed||!Number.isInteger(msg.index)||msg.index<0||msg.index>=meta.next)throw Error('מקטע הקובץ אינו זמין');
+  const chunk=await dbAction('chunks','readonly',s=>s.get(fileKey(msg.id,msg.index)));
+  if(typeof chunk!=='string')throw Error('חסר מקטע קובץ');
+  return {ok:true,data:chunk};
+ }
+ if(!isSite)throw Error('הבקשה לקובץ אינה מורשית');
+ if(type==='FILE_BEGIN'){
+  const a=msg.attachment;
+  if(!a||!(/^[a-f0-9-]{36}$/i.test(a.id))||typeof a.name!=='string'||!a.name||a.name.length>180||
+    /[\\/\x00-\x1f]/.test(a.name)||typeof a.type!=='string'||a.type.length>100||
+    !Number.isSafeInteger(a.size)||a.size<=0)throw Error('נתוני הקובץ אינם תקינים');
+  await cleanUpload(a.id);
+  await dbAction('meta','readwrite',s=>s.put({id:a.id,name:a.name,type:a.type,size:a.size,next:0,bytes:0,committed:false},a.id));
+  return {ok:true};
+ }
+ if(!/^[a-f0-9-]{36}$/i.test(String(msg.id||'')))throw Error('מזהה קובץ שגוי');
+ if(type==='FILE_ABORT'){await cleanUpload(msg.id);return {ok:true}}
+ const meta=await dbAction('meta','readonly',s=>s.get(msg.id));
+ if(!meta)throw Error('לא נמצאה העלאת קובץ פעילה');
+ if(type==='FILE_CHUNK'){
+  if(meta.committed||!Number.isInteger(msg.index)||msg.index!==meta.next||typeof msg.data!=='string'||
+   !/^[A-Za-z0-9+/]+={0,2}$/.test(msg.data)||msg.data.length>400000)throw Error('מקטע קובץ אינו תקין או אינו בסדר הנכון');
+  let size;try{size=atob(msg.data).length}catch{throw Error('קידוד מקטע קובץ שגוי')}
+  if(size===0||size>196608||meta.bytes+size>meta.size)throw Error('מקטע קובץ גדול מהצפוי');
+  // Write chunk and progress in one transaction.
+  const db=await fileDb();
+  await new Promise((resolve,reject)=>{
+   const tx=db.transaction(['chunks','meta'],'readwrite');
+   tx.objectStore('chunks').put(msg.data,fileKey(msg.id,msg.index));
+   tx.objectStore('meta').put({...meta,next:meta.next+1,bytes:meta.bytes+size},msg.id);
+   tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
+  });
+  return {ok:true,received:meta.bytes+size};
+ }
+ if(type==='FILE_COMMIT'){
+  if(meta.bytes!==meta.size||meta.next<1)throw Error('העברת הקובץ אינה מלאה');
+  await dbAction('meta','readwrite',s=>s.put({...meta,committed:true},msg.id));
+  return {ok:true,attachment:{id:meta.id,name:meta.name,type:meta.type,size:meta.size,chunks:meta.next}};
+ }
+ throw Error('פעולת קובץ לא מוכרת');
+}
+chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
+ if(!['FILE_BEGIN','FILE_CHUNK','FILE_COMMIT','FILE_ABORT','FILE_CHUNK_READ'].includes(msg?.type))return;
+ handleFileMessage(msg,sender).then(reply,e=>reply({ok:false,error:String(e.message||e)}));
+ return true;
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse)=>{
  if(!['SCHEDULE_TEST','STATUS_TEST'].includes(msg?.type)) return;
  if(msg.type==='STATUS_TEST'){
@@ -82,10 +166,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse)=>{
   if(typeof job.text!=='string'||job.text.length>4000)throw Error('הטקסט חייב להיות קצר מ־4,000 תווים');
   const a=job.attachment;
   if(a!==null&&a!==undefined){
-   if(!a||typeof a!=='object'||typeof a.name!=='string'||a.name.length>180||/[\\/\x00-\x1f]/.test(a.name)||
-    typeof a.type!=='string'||a.type.length>100||!Number.isInteger(a.size)||a.size<1||a.size>4*1024*1024||
-    typeof a.data!=='string'||a.data.length>5800000||!/^[A-Za-z0-9+/]+={0,2}$/.test(a.data))
-    throw Error('הקובץ אינו תקין או גדול מ־4MB');
+   if(!a||typeof a!=='object'||typeof a.id!=='string'||!(/^[a-f0-9-]{36}$/i.test(a.id))||
+    typeof a.name!=='string'||a.name.length>180||typeof a.type!=='string'||a.type.length>100||
+    !Number.isSafeInteger(a.size)||a.size<1||!Number.isSafeInteger(a.chunks)||a.chunks<1)
+    throw Error('נתוני הקובץ אינם תקינים');
+   const stored=await dbAction('meta','readonly',s=>s.get(a.id));
+   if(!stored?.committed||stored.size!==a.size||stored.next!==a.chunks||stored.name!==a.name)
+    throw Error('הקובץ לא הועבר במלואו לתוסף');
   }
   if(!job.text.trim()&&!a)throw Error('יש להזין הודעה או לצרף קובץ');
   if(!Number.isFinite(job.when) || job.when<Date.now()-15000 || job.when>Date.now()+30*86400000)throw Error('מועד התזמון אינו בטווח המותר');
@@ -127,7 +214,7 @@ async function sendDueJob(expectedId){
   catch(error){throw Error('חיבור התוסף ללשונית אבד בזמן השליחה: '+String(error?.message||error).slice(0,180));}
   if(!result)throw Error('WhatsApp Web לא החזיר תשובה מניסיון השליחה');
   if(!result.ok){const err=new Error(result.error||'השליחה לא אושרה');err.metrics=result.metrics;throw err;}
-  job.phase='attempted';job.attachment=null;await chrome.storage.local.set({[JOB]:job});await status('attempted','ניסיון שליחה בוצע; יש לבדוק בקבוצה שההודעה נראית');
+  job.phase='attempted';const used=job.attachment?.id;job.attachment=null;await chrome.storage.local.set({[JOB]:job});if(used)cleanUpload(used).catch(()=>{});await status('attempted','ניסיון שליחה בוצע; יש לבדוק בקבוצה שההודעה נראית');
   /* Delivery status is reported via STATUS_TEST */
- }catch(e){await status('failed',String(e.message||e),e.metrics||{});const r=await chrome.storage.local.get(JOB);if(r[JOB]){r[JOB].phase='failed';r[JOB].attachment=null;r[JOB].error=String(e.message||e);await chrome.storage.local.set({[JOB]:r[JOB]});}/* Delivery status is reported via STATUS_TEST */}finally{ongoing=false}
+ }catch(e){await status('failed',String(e.message||e),e.metrics||{});const r=await chrome.storage.local.get(JOB);if(r[JOB]){r[JOB].phase='failed';const used=r[JOB].attachment?.id;r[JOB].attachment=null;if(used)cleanUpload(used).catch(()=>{});r[JOB].error=String(e.message||e);await chrome.storage.local.set({[JOB]:r[JOB]});}/* Delivery status is reported via STATUS_TEST */}finally{ongoing=false}
 }
