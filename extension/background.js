@@ -162,6 +162,7 @@ async function typeTrustedLines(sender,textValue){
  const tabId=sender.tab.id;
  const tab=await chrome.tabs.get(tabId);
  if(!tab.url?.startsWith('https://web.whatsapp.com/'))throw Error('הלשונית השתנתה');
+ if(!tab.active)throw Error('לשונית WhatsApp אינה פעילה בעת ההקלדה');
  const dbg={tabId};
  trustedTyping=true;
  let attached=false;
@@ -175,7 +176,7 @@ async function typeTrustedLines(sender,textValue){
    // synthetic insertLineBreak and insertHTML from previous versions.
    if(i){
     const key={key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13,modifiers:8};
-    await command('Input.dispatchKeyEvent',{type:'keyDown',...key});
+    await command('Input.dispatchKeyEvent',{type:'keyDown',...key,text:'\r',unmodifiedText:'\r'});
     await command('Input.dispatchKeyEvent',{type:'keyUp',...key});
    }
    if(lines[i])await command('Input.insertText',{text:lines[i]});
