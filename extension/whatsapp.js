@@ -2,9 +2,10 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV033)return;
-globalThis.__naharSchedulerAgentV033=true;
+if(globalThis.__naharSchedulerAgentV034)return;
+globalThis.__naharSchedulerAgentV034=true;
 let sending=false;
+let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const norm=s=>String(s||'').normalize('NFKC').replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g,'').replace(/\s+/g,' ').trim();
 const lexical=s=>norm(s).replace(/[\uFE0E\uFE0F]/g,'').replace(/[^\p{L}\p{N}]+/gu,' ').trim().toLowerCase();
@@ -148,19 +149,39 @@ function getComposerVariants(e){
  visit(e);variants.push(fromDom);
  return variants;
 }
-function fillComposer(e,text){
- e.focus();
+async function fillComposer(e,text){
  const original=String(text).replace(/\r\n?/g,'\n');
- const html=original.split('\n').map(line=>line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')).join('<br>');
- if(!document.execCommand('insertHTML',false,html))throw Error('הקלדת ההודעה נכשלה');
  const expected=messageCanonical(original);
- const values=getComposerVariants(e).map(messageCanonical);
- if(!values.some(v=>v===expected)){
-  const actual=values[0]||'';
-  let mismatch=0;while(mismatch<Math.min(actual.length,expected.length)&&actual[mismatch]===expected[mismatch])mismatch++;
-  // Do not log message text or send an unverified draft.
-  throw Error('נוסח ההודעה אינו תואם למקור — לא נשלחה הודעה (אורך מקור '+expected.length+', אורך טיוטה '+actual.length+', מיקום הבדל '+mismatch+')');
+ const read=()=>getComposerVariants(composer()||e).map(messageCanonical);
+ const matches=()=>read().some(v=>v===expected);
+ if(read().some(Boolean))throw Error('קיימת כבר טיוטה בשדה הכתיבה — לא שיניתי אותה');
+ // Ensure selection is inside the actual contenteditable editor, not a placeholder wrapper.
+ const editorNode=e.isContentEditable?e:e.querySelector('[contenteditable="true"]');
+ if(!editorNode)throw Error('לא נמצא עורך WhatsApp שניתן לכתוב בו');
+ editorNode.focus();
+ const sel=document.getSelection(),range=document.createRange();
+ range.selectNodeContents(editorNode);range.collapse(false);
+ sel.removeAllRanges();sel.addRange(range);
+ const html=original.split('\n').map(line=>line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')).join('<br>');
+ document.execCommand('insertHTML',false,html);
+ await wait(300);
+ if(matches())return;
+ // In some WhatsApp builds insertHTML reports success but React discards it.
+ // Only retry with plain text if the live editor is still entirely empty.
+ if(read().some(Boolean)){
+  const actual=read()[0]||'';
+  throw Error('הטקסט הוקלד אך אינו תואם למקור — עצרתי לפני שליחה (מקור '+expected.length+' תווים, בפועל '+actual.length+')');
  }
+ const live=composer();
+ if(!live||!currentMatches(activeSendingGroup))throw Error('שדה הכתיבה או השיחה השתנו בעת ההקלדה');
+ live.focus();
+ const selection=document.getSelection(),r=document.createRange();
+ r.selectNodeContents(live);r.collapse(false);selection.removeAllRanges();selection.addRange(r);
+ if(!document.execCommand('insertText',false,original))throw Error('WhatsApp לא קיבל הקלדת טקסט');
+ await wait(350);
+ if(matches())return;
+ const actual=read()[0]||'';
+ throw Error('ההודעה לא נקלטה בשדה הכתיבה — לא נשלחה (מקור '+expected.length+' תווים, בפועל '+actual.length+')');
 }
 function sendButton(){
  const m=document.querySelector('#main');if(!m)return null;
@@ -176,7 +197,8 @@ async function send(text,name){
  if(!await waitForTarget(name,1000))throw Error('לא אומתה קבוצת הבדיקות לפני כתיבה');
  const box=composer();if(!box)throw Error('שדה ההודעה לא נמצא');
  if(norm(box.innerText))throw Error('יש טיוטה קיימת, בוטל');
- fillComposer(box,text);
+ activeSendingGroup=name;
+ await fillComposer(box,text);
  if(!currentMatches(name))throw Error('השיחה השתנתה לפני השליחה — בוטל');
  const b=sendButton();if(!b)throw Error('כפתור השליחה לא נמצא; ההודעה נותרה כטיוטה');
  // Exactly one click: repeated synthetic clicks could cause duplicate sends.
@@ -184,11 +206,11 @@ async function send(text,name){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V033'){reply({ok:true,version:'0.3.3',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V033')return;
+ if(msg?.type==='WA_TEST_PING_V034'){reply({ok:true,version:'0.3.4',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V034')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- send(msg.text,msg.group).then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>sending=false);
+ send(msg.text,msg.group).then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
  return true;
 });
 })();
