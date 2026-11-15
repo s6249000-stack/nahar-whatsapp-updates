@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV0314)return;
-globalThis.__naharSchedulerAgentV0314=true;
+if(globalThis.__naharSchedulerAgentV0315)return;
+globalThis.__naharSchedulerAgentV0315=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -163,43 +163,44 @@ function cursorEnd(el){
  range.selectNodeContents(el);range.collapse(false);
  selection.removeAllRanges();selection.addRange(range);
 }
-async function tryInsert(el,text,command){
- cursorEnd(el);
- const success=document.execCommand(command,false,text);
+async function typeExactLines(editor,original){
+ const lines=original.split('\n');
+ cursorEnd(editor);
+ for(let i=0;i<lines.length;i++){
+  // insertText with an embedded newline is flattened by the WhatsApp editor.
+  // Separate each line with an actual contenteditable line break.
+  if(i){
+   const ok=document.execCommand('insertLineBreak',false,null);
+   if(!ok)throw Error('WhatsApp לא קיבל מעבר שורה '+i+' מתוך '+(lines.length-1));
+  }
+  if(lines[i]&&!document.execCommand('insertText',false,lines[i]))
+   throw Error('WhatsApp לא קיבל את שורה '+(i+1));
+ }
  await wait(500);
- return Boolean(success&&exactMatches(el,text));
 }
 async function fillComposer(el,text){
  const original=String(text).replace(/\r\n?/g,'\n');
  const editor=realEditor(el);
  if(!editor)throw Error('לא נמצא שדה כתיבה שניתן להקליד בו');
- const existing=composerReads(editor);
- if(existing.some(v=>v.replace(/\n/g,'').trim()))throw Error('יש טיוטה בשדה הכתיבה — לא מחקתי אותה');
- // First use the same plain-text insertion path that sent the earlier one-line test.
- // Many WhatsApp builds reject insertHTML of multiple <div> elements in a controlled editor.
- if(await tryInsert(editor,original,'insertText'))return;
- let reads=composerReads(editor);
- const hasMeaningfulText=reads.some(v=>v.replace(/\n/g,'').length>0);
- if(hasMeaningfulText){
-  // Never overwrite partial content: preserve it for diagnosis rather than risk duplicates.
-  const longest=reads.reduce((a,b)=>b.length>a.length?b:a,'');
-  throw Error('ההודעה נקלטה באופן חלקי — בוטלה השליחה (מקור '+exactText(original).length+', טיוטה '+longest.length+', שורות מקור '+original.split('\n').length+')');
+ // Do not overwrite previous drafts, even ones left after a failed attempt.
+ if(composerReads(editor).some(v=>v.replace(/\n/g,'').trim()))
+  throw Error('יש כבר טיוטה בשדה הכתיבה — נקה אותה לפני ניסיון חדש');
+ if(!original.includes('\n')){
+  cursorEnd(editor);
+  if(!document.execCommand('insertText',false,original))throw Error('WhatsApp לא קיבל הקלדת הודעה');
+  await wait(400);
+ }else{
+  await typeExactLines(editor,original);
  }
- // Retry HTML only if WhatsApp discarded all substantive characters.
- // BRs are used between lines; avoid wrapping every line with a DIV, which
- // previously left a lone newline in the live editor.
- const escape=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
- const html=original.split('\n').map(escape).join('<br>');
- cursorEnd(editor);
- document.execCommand('insertHTML',false,html);
- await wait(500);
  if(exactMatches(editor,original))return;
- reads=composerReads(editor);
- const longest=reads.reduce((a,b)=>b.length>a.length?b:a,'');
+ const variants=composerReads(editor);
  const expected=exactText(original);
- let different=0;
- while(different<Math.min(expected.length,longest.length)&&expected[different]===longest[different])different++;
- throw Error('נוסח ההודעה אינו תואם למקור — לא נשלחה (מקור '+expected.length+', טיוטה '+longest.length+', הבדל בתו '+different+', שורות מקור '+original.split('\n').length+')');
+ const best=variants.reduce((a,b)=>b.length>a.length?b:a,'');
+ let mismatch=0;while(mismatch<Math.min(best.length,expected.length)&&best[mismatch]===expected[mismatch])mismatch++;
+ const breakCount=t=>(t.match(/\n/g)||[]).length;
+ throw Error('הנוסח לא נשמר במדויק — לא נשלח (מקור '+expected.length+
+  ', טיוטה '+best.length+', מעברי שורה מקור '+breakCount(expected)+
+  ', בטיוטה '+breakCount(best)+', הבדל ראשון '+mismatch+')');
 }
 function containsLink(text){return /(?:https?:\/\/|www\.)[^\s<>"']+/i.test(text)}
 async function holdForLinkPreview(text,name){
@@ -500,8 +501,8 @@ async function send(text,name,attachment){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V0314'){reply({ok:true,version:'0.3.14',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V0314')return;
+ if(msg?.type==='WA_TEST_PING_V0315'){reply({ok:true,version:'0.3.15',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V0315')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
  send(msg.text,msg.group,msg.attachment).then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
