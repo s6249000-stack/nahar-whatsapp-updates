@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV045)return;
-globalThis.__naharSchedulerAgentV045=true;
+if(globalThis.__naharSchedulerAgentV046)return;
+globalThis.__naharSchedulerAgentV046=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -631,21 +631,31 @@ async function openForwardFromMessage(row){
  throw Error('תפריט העברת ההודעה לא נפתח או שאפשרות העברה לא זוהתה');
 }
 function forwardingDialog(){
- const text=/העברת הודעה אל|העבר הודעה אל|Forward message to|Forward to|העבר אל/i;
- const candidates=[...document.querySelectorAll('[role="dialog"],[data-testid*="forward"],[aria-modal="true"]')].filter(shown);
- for(const el of candidates){
-  if(text.test((el.textContent||'').slice(0,400))||/forward/i.test(attr(el,'data-testid')))return el;
- }
- // WhatsApp sometimes mounts a non-dialog panel. Require a visible search
- // and an explicit forwarding heading, rather than assuming any overlay.
- const headers=[...document.querySelectorAll('h1,h2,[role="heading"]')].filter(shown).filter(e=>text.test(e.textContent||''));
- for(const h of headers){
-  let e=h.parentElement;
-  for(let i=0;i<6&&e;i++,e=e.parentElement){
-   if(e.querySelector('[role="textbox"],input[type="text"],input[type="search"]'))return e;
+ // Never accept the broad overlay/backdrop as the forwarding dialog.
+ // WhatsApp frequently puts role="dialog" on a full-width 1536px container,
+ // whereas the actual central panel in the user's screenshot is ~470px wide.
+ const title=/^(?:העברת הודעה אל|העבר הודעה אל|Forward message to|Forward to|העבר אל)$/i;
+ const headings=[...document.querySelectorAll('h1,h2,h3,[role="heading"],span,div')]
+  .filter(shown)
+  .filter(el=>el.children.length<=2&&title.test(norm(el.textContent)));
+ const matches=[];
+ for(const heading of headings){
+  let node=heading;
+  for(let i=0;i<12&&node&&node!==document.body;i++,node=node.parentElement){
+   const r=node.getBoundingClientRect();
+   if(r.width<355||r.width>700||r.height<490||r.height>Math.min(window.innerHeight+30,1050))continue;
+   if(r.left<0||r.right>window.innerWidth+12)continue;
+   // Both the recipient search and the selected-chat result must live in panel.
+   const inputs=[...node.querySelectorAll('input,[role="textbox"],[contenteditable="true"]')].filter(shown);
+   if(!inputs.length)continue;
+   const close=[...node.querySelectorAll('[aria-label],[data-icon],button')].filter(shown)
+     .some(e=>/close|סגור/i.test([attr(e,'aria-label'),attr(e,'data-icon'),attr(e,'title')].join(' ')));
+   matches.push({node,area:r.width*r.height,hasClose:close});
   }
  }
- return null;
+ matches.sort((x,y)=>x.area-y.area);
+ const chosen=matches.find(x=>x.hasClose)||matches[0];
+ return chosen?.node||null;
 }
 function forwardChoice(dialog,target){
  const wanted=lexical(target);
@@ -702,7 +712,7 @@ function forwardSelectionState(dialog,row,target){
 }
 function forwardConfirm(dialog){
  const bounds=dialog.getBoundingClientRect();
- if(bounds.width<320||bounds.width>800||bounds.height<420) return null;
+ if(bounds.width<355||bounds.width>700||bounds.height<490) return null;
  const nearAction=(el)=>{
   if(!shown(el)||!dialog.contains(el))return false;
   const r=el.getBoundingClientRect();
@@ -808,11 +818,11 @@ async function forwardLastTestMessage(source,target){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V045'){reply({ok:true,version:'0.4.5',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V045'&&msg?.type!=='FORWARD_TEST_V045')return;
+ if(msg?.type==='WA_TEST_PING_V046'){reply({ok:true,version:'0.4.6',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V046'&&msg?.type!=='FORWARD_TEST_V046')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='FORWARD_TEST_V045'
+ const promise=msg.type==='FORWARD_TEST_V046'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
