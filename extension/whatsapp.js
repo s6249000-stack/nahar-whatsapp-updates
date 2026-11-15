@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV032)return;
-globalThis.__naharSchedulerAgentV032=true;
+if(globalThis.__naharSchedulerAgentV033)return;
+globalThis.__naharSchedulerAgentV033=true;
 let sending=false;
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const norm=s=>String(s||'').normalize('NFKC').replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g,'').replace(/\s+/g,' ').trim();
@@ -184,8 +184,8 @@ async function send(text,name){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V032'){reply({ok:true,version:'0.3.2',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V032')return;
+ if(msg?.type==='WA_TEST_PING_V033'){reply({ok:true,version:'0.3.3',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V033')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
  send(msg.text,msg.group).then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>sending=false);
