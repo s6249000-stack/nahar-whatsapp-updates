@@ -51,10 +51,10 @@ async function probeWhatsappTab(tab){
  for(let i=0;i<24;i++){
   try{
    let pong;
-   try{pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V0316'});}
+   try{pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V040'});}
    catch(e){
     await chrome.scripting.executeScript({target:{tabId:tab.id},files:['whatsapp.js']});
-    pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V0316'});
+    pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V040'});
    }
    if(pong?.ok&&(pong.hasSide||pong.hasMain))return pong;
    lastError='WhatsApp Web עדיין טוען את רשימת השיחות';
@@ -147,6 +147,52 @@ chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
  return true;
 });
 
+
+// Trusted multiline keyboard events are scoped to the existing WhatsApp Web tab
+// during an authenticated, actively processing test only. This is never used to
+// read page data, bypass WhatsApp verification, or send a message.
+let trustedTyping=false;
+async function typeTrustedLines(sender,textValue){
+ const job=(await chrome.storage.local.get(JOB))[JOB];
+ if(!job||job.phase!=='processing'||job.text!==textValue||
+    !sender.tab?.id||!sender.url?.startsWith('https://web.whatsapp.com/'))
+   throw Error('הקלדת דפדפן נחסמה: אין ניסיון WhatsApp מורשה פעיל');
+ if(!textValue.includes('\n'))throw Error('הקלדה זו מיועדת להודעה מרובת שורות בלבד');
+ if(trustedTyping)throw Error('הקלדת דפדפן אחרת כבר מתבצעת');
+ const tabId=sender.tab.id;
+ const tab=await chrome.tabs.get(tabId);
+ if(!tab.url?.startsWith('https://web.whatsapp.com/'))throw Error('הלשונית השתנתה');
+ const dbg={tabId};
+ trustedTyping=true;
+ let attached=false;
+ try{
+  try{await chrome.debugger.attach(dbg,'1.3');attached=true}
+  catch(e){throw Error('Chrome לא אישר הדמיית הקלדה מדויקת: '+String(e.message||e).slice(0,140))}
+  const lines=textValue.replace(/\r\n?/g,'\n').split('\n');
+  const command=(method,params)=>chrome.debugger.sendCommand(dbg,method,params);
+  for(let i=0;i<lines.length;i++){
+   // A Shift+Enter produces a *real editor line break*, not the flattened
+   // synthetic insertLineBreak and insertHTML from previous versions.
+   if(i){
+    const key={key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13,modifiers:8};
+    await command('Input.dispatchKeyEvent',{type:'keyDown',...key});
+    await command('Input.dispatchKeyEvent',{type:'keyUp',...key});
+   }
+   if(lines[i])await command('Input.insertText',{text:lines[i]});
+  }
+  return {ok:true,lines:lines.length};
+ }finally{
+  if(attached)try{await chrome.debugger.detach(dbg)}catch{}
+  trustedTyping=false;
+ }
+}
+chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
+ if(msg?.type!=='WA_TRUSTED_TYPE_LINES_V040')return;
+ if(typeof msg.text!=='string'||msg.text.length>4000){reply({ok:false,error:'טקסט להקלדה אינו תקין'});return}
+ typeTrustedLines(sender,msg.text).then(reply,e=>reply({ok:false,error:String(e.message||e)}));
+ return true;
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse)=>{
  if(!['SCHEDULE_TEST','STATUS_TEST'].includes(msg?.type)) return;
  if(msg.type==='STATUS_TEST'){
@@ -210,7 +256,7 @@ async function sendDueJob(expectedId){
   await probeWhatsappTab(tab);
   // Exactly one send attempt; errors are not automatically retried to avoid duplicate WhatsApp messages.
   let result;
-  try{result=await chrome.tabs.sendMessage(tab.id,{type:'SEND_TEST_V0316',group:job.group,text:job.text,attachment:job.attachment,id:job.id});}
+  try{result=await chrome.tabs.sendMessage(tab.id,{type:'SEND_TEST_V040',group:job.group,text:job.text,attachment:job.attachment,id:job.id});}
   catch(error){throw Error('חיבור התוסף ללשונית אבד בזמן השליחה: '+String(error?.message||error).slice(0,180));}
   if(!result)throw Error('WhatsApp Web לא החזיר תשובה מניסיון השליחה');
   if(!result.ok){const err=new Error(result.error||'השליחה לא אושרה');err.metrics=result.metrics;throw err;}
