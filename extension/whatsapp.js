@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV044)return;
-globalThis.__naharSchedulerAgentV044=true;
+if(globalThis.__naharSchedulerAgentV045)return;
+globalThis.__naharSchedulerAgentV045=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -701,26 +701,61 @@ function forwardSelectionState(dialog,row,target){
  return {selected:false,reason:'not-confirmed'};
 }
 function forwardConfirm(dialog){
- const controls=[...dialog.querySelectorAll('button,[role="button"],[aria-label],[data-testid],[data-icon]')].filter(shown);
- const named=[...new Set(controls.map(e=>e.closest('button,[role="button"]')||e))].filter(e=>{
-  const meta=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),attr(e,'data-icon'),
-    ...[...e.querySelectorAll('[data-icon]')].map(x=>attr(x,'data-icon'))].join(' ');
-  if(/info|message-info|add|attach|close|cancel|בטל|סגור|הוסף/.test(meta))return false;
-  return /\b(?:forward|send)\b|(?:העבר|שלח)/i.test(meta);
- });
- if(named.length===1)return named[0];
- // Screenshot-confirmed final action: black circular forward arrow at dialog
- // bottom-left. Do not pick it unless a single recipient is verified.
  const bounds=dialog.getBoundingClientRect();
- const circles=[...dialog.querySelectorAll('button,[role="button"]')].filter(shown).filter(e=>{
-  const r=e.getBoundingClientRect();
-  if(r.width<38||r.width>75||Math.abs(r.width-r.height)>12)return false;
-  if(r.left<bounds.left-10||r.left>bounds.left+105||r.bottom<bounds.bottom-105)return false;
-  const c=getComputedStyle(e).backgroundColor.match(/[\d.]+/g)?.map(Number)||[];
-  return c.length>=3&&(c.length<4||c[3]>.5)&&c[0]+c[1]+c[2]<235&&
-   (!!e.querySelector('svg,path,[data-icon]'));
+ if(bounds.width<320||bounds.width>800||bounds.height<420) return null;
+ const nearAction=(el)=>{
+  if(!shown(el)||!dialog.contains(el))return false;
+  const r=el.getBoundingClientRect();
+  return r.left>=bounds.left-12&&r.left<bounds.left+112&&
+    r.top>bounds.bottom-112&&r.bottom<=bounds.bottom+10 &&
+    r.width>=35&&r.width<=83&&r.height>=35&&r.height<=83;
+ };
+ const excluded=/info|message-info|add|attach|close|cancel|search|menu|בטל|סגור|הוסף|חפש|פרטי/i;
+ const raw=[...dialog.querySelectorAll('button,[role="button"],[aria-label],[title],[data-testid],[data-icon],svg,div')].filter(nearAction);
+ // Prefer an explicit forwarding control, but *only* inside the bottom-left
+ // action zone of the target-selection dialog.
+ const semantic=[...new Set(raw.map(e=>e.closest('button,[role="button"]')||e))].filter(e=>{
+  if(!nearAction(e))return false;
+  const meta=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),attr(e,'data-icon'),
+    ...[...e.querySelectorAll('[data-icon]')].map(n=>attr(n,'data-icon'))].join(' ');
+  return !excluded.test(meta)&&/(?:forward|send|העבר|שלח)/i.test(meta);
  });
- return circles.length===1?circles[0]:null;
+ if(semantic.length===1)return semantic[0];
+ // Screenshot: the send control is a solid near-black circle (about 50 px)
+ // with a white arrow at the very bottom-left of the modal. It may be a DIV
+ // without role=button, so inspect the actual element and its ancestors.
+ const isDark=e=>{
+  const css=getComputedStyle(e),color=css.backgroundColor;
+  const m=color.match(/rgba?\(([^)]+)\)/i);if(!m)return false;
+  const numbers=m[1].split(',').map(Number);
+  return numbers.length>=3&&(numbers.length===3||numbers[3]>.75)&&numbers.slice(0,3).every(x=>x<65);
+ };
+ const candidates=raw.filter(e=>{
+  if(!nearAction(e)||!isDark(e))return false;
+  const r=e.getBoundingClientRect();
+  if(Math.abs(r.width-r.height)>12||r.width<42||r.width>72)return false;
+  if(!e.querySelector('svg,[data-icon],path,polygon,polyline'))return false;
+  const meta=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid')].join(' ');
+  if(excluded.test(meta))return false;
+  return true;
+ });
+ // Several nested wrappers can describe the same circle; take the innermost
+ // black circle, but never choose between two separate circles.
+ const inner=candidates.filter(e=>!candidates.some(other=>other!==e&&e.contains(other)));
+ if(inner.length===1)return inner[0];
+ // Locate the screenshot-confirmed circle by its center, then verify that
+ // the actual pointer target belongs to a single black arrow control.
+ const x=bounds.left+34,y=bounds.bottom-33;
+ const hit=document.elementFromPoint(x,y);
+ if(hit&&dialog.contains(hit)){
+  const ancestors=[];
+  for(let e=hit;e&&e!==dialog;e=e.parentElement){
+   if(candidates.includes(e))ancestors.push(e);
+  }
+  if(ancestors.length&&candidates.every(e=>ancestors.includes(e)||ancestors.some(a=>a.contains(e)||e.contains(a))))
+   return ancestors[0];
+ }
+ return null;
 }
 async function forwardLastTestMessage(source,target){
  if(source!==FORWARD_TEST_GROUP||target!==FORWARD_TEST_GROUP)
@@ -765,7 +800,7 @@ async function forwardLastTestMessage(source,target){
  const selectedState=forwardSelectionState(dialog,chosen,target);
  if(!selectedState.selected)throw Error('לא ניתן לאמת שקבוצת הבדיקות נבחרה כיעד (סימון לא זוהה)');
  const confirm=forwardConfirm(dialog);
- if(!confirm)throw Error('כפתור אישור ההעברה לא נמצא באופן חד-משמעי');
+ if(!confirm)throw Error('כפתור אישור ההעברה לא זוהה. חלון: '+Math.round(dialog.getBoundingClientRect().width)+'x'+Math.round(dialog.getBoundingClientRect().height));
  if(!currentMatches(source))throw Error('קבוצת המקור השתנתה לפני אישור ההעברה');
  humanClick(confirm);
  await wait(1200);
@@ -773,11 +808,11 @@ async function forwardLastTestMessage(source,target){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V044'){reply({ok:true,version:'0.4.4',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V044'&&msg?.type!=='FORWARD_TEST_V044')return;
+ if(msg?.type==='WA_TEST_PING_V045'){reply({ok:true,version:'0.4.5',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V045'&&msg?.type!=='FORWARD_TEST_V045')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='FORWARD_TEST_V044'
+ const promise=msg.type==='FORWARD_TEST_V045'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
