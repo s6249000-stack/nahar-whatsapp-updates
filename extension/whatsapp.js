@@ -596,8 +596,22 @@ async function forwardLastTestMessage(source,target){
   throw Error('לא ניתן להוכיח שההודעה האחרונה היא הודעה שנשלחה מאיתנו');
  await openForwardFromMessage(row);
  let dialog=null;
- for(let i=0;i<24;i++){dialog=forwardingDialog();if(dialog)break;await wait(200)}
- if(!dialog)throw Error('חלון העברת ההודעה לא נפתח באופן מזוהה');
+ for(let i=0;i<12;i++){dialog=forwardingDialog();if(dialog)break;await wait(180)}
+ if(!dialog){
+  // The video shows an intermediate message-selection footer with a second
+  // "Forward" control. Never use an ordinal menu item or generic arrow.
+  const main=document.querySelector('#main');
+  const selected=[...main.querySelectorAll('[aria-checked="true"],input[type="checkbox"]:checked,[data-state="checked"]')].filter(shown);
+  const actions=[...main.querySelectorAll('button,[role="button"]')].filter(shown).filter(e=>{
+   const info=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),e.textContent].join(' ').trim();
+   const r=e.getBoundingClientRect(),b=main.getBoundingClientRect();
+   return /(?:^|\\s)(?:העבר|forward)(?:\\s|$)/i.test(info)&&r.top>b.bottom-115;
+  });
+  if(selected.length!==1||actions.length!==1)throw Error('נפתח מצב בחירת הודעות, אך לא אומתו בחירה יחידה וכפתור העברה');
+  humanClick(actions[0]);
+  for(let i=0;i<18;i++){dialog=forwardingDialog();if(dialog)break;await wait(180)}
+ }
+ if(!dialog)throw Error('חלון בחירת יעד להעברה לא נפתח');
  const search=[...dialog.querySelectorAll('input,[contenteditable="true"],[role="textbox"]')].find(shown);
  if(search&&!readSearch(search).trim())setSearch(search,'פנימי שמעון נוה');
  for(let i=0;i<30;i++){
