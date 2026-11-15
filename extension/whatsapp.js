@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV047)return;
-globalThis.__naharSchedulerAgentV047=true;
+if(globalThis.__naharSchedulerAgentV048)return;
+globalThis.__naharSchedulerAgentV048=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -744,62 +744,70 @@ async function stableForwardDialog(minSamples=3){
  }
  return null;
 }
+function forwardConfirmDiagnostics(dialog){
+ const r=dialog.getBoundingClientRect();
+ const x=Math.round(r.left+33),y=Math.round(r.bottom-33);
+ const hit=document.elementFromPoint(x,y);
+ const described=[...dialog.querySelectorAll('button,[role="button"],[data-icon],svg,div')]
+  .filter(shown).filter(e=>{
+   const q=e.getBoundingClientRect();
+   return q.width>=28&&q.width<=100&&q.height>=28&&q.height<=100&&
+    q.left<r.left+120&&q.right>r.left&&q.top>r.bottom-125&&q.bottom<r.bottom+15;
+  });
+ const icons=described.filter(e=>!!e.querySelector('svg,[data-icon]')||e.tagName.toLowerCase()==='svg');
+ return 'נקודת חץ '+x+','+y+', פגיעה '+(hit?.tagName||'אין')+
+  ', רכיבים תחתונים '+described.length+', בעלי SVG '+icons.length;
+}
 function forwardConfirm(dialog){
  const bounds=dialog.getBoundingClientRect();
- if(bounds.width<355||bounds.width>700||bounds.height<490) return null;
- const nearAction=(el)=>{
-  if(!shown(el)||!dialog.contains(el))return false;
-  const r=el.getBoundingClientRect();
-  return r.left>=bounds.left-12&&r.left<bounds.left+112&&
-    r.top>bounds.bottom-112&&r.bottom<=bounds.bottom+10 &&
-    r.width>=35&&r.width<=83&&r.height>=35&&r.height<=83;
- };
- const excluded=/info|message-info|add|attach|close|cancel|search|menu|בטל|סגור|הוסף|חפש|פרטי/i;
- const raw=[...dialog.querySelectorAll('button,[role="button"],[aria-label],[title],[data-testid],[data-icon],svg,div')].filter(nearAction);
- // Prefer an explicit forwarding control, but *only* inside the bottom-left
- // action zone of the target-selection dialog.
- const semantic=[...new Set(raw.map(e=>e.closest('button,[role="button"]')||e))].filter(e=>{
-  if(!nearAction(e))return false;
-  const meta=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),attr(e,'data-icon'),
-    ...[...e.querySelectorAll('[data-icon]')].map(n=>attr(n,'data-icon'))].join(' ');
-  return !excluded.test(meta)&&/(?:forward|send|העבר|שלח)/i.test(meta);
- });
- if(semantic.length===1)return semantic[0];
- // Screenshot: the send control is a solid near-black circle (about 50 px)
- // with a white arrow at the very bottom-left of the modal. It may be a DIV
- // without role=button, so inspect the actual element and its ancestors.
- const isDark=e=>{
-  const css=getComputedStyle(e),color=css.backgroundColor;
-  const m=color.match(/rgba?\(([^)]+)\)/i);if(!m)return false;
-  const numbers=m[1].split(',').map(Number);
-  return numbers.length>=3&&(numbers.length===3||numbers[3]>.75)&&numbers.slice(0,3).every(x=>x<65);
- };
- const candidates=raw.filter(e=>{
-  if(!nearAction(e)||!isDark(e))return false;
+ if(bounds.width<355||bounds.width>700||bounds.height<490)return null;
+ const near=(e)=>{
+  if(!e||!shown(e)||!dialog.contains(e))return false;
   const r=e.getBoundingClientRect();
-  if(Math.abs(r.width-r.height)>12||r.width<42||r.width>72)return false;
-  if(!e.querySelector('svg,[data-icon],path,polygon,polyline'))return false;
-  const meta=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid')].join(' ');
-  if(excluded.test(meta))return false;
-  return true;
+  return r.width>=35&&r.width<=88&&r.height>=35&&r.height<=88&&
+    r.left>=bounds.left-8&&r.left<bounds.left+112&&
+    r.bottom>bounds.bottom-100&&r.bottom<=bounds.bottom+10;
+ };
+ // The screenshot shows a 50px black, round FORWARD control at the bottom-left.
+ // Prefer explicit send/forward-labelled controls in this action zone.
+ const elems=[...dialog.querySelectorAll('button,[role="button"],[aria-label],[title],[data-testid],[data-icon],svg,div')];
+ const named=[...new Set(elems.filter(near).map(e=>e.closest('button,[role="button"]')||e))].filter(e=>{
+  if(!near(e))return false;
+  const labels=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),attr(e,'data-icon'),
+    ...[...e.querySelectorAll('[data-icon]')].map(x=>attr(x,'data-icon'))].join(' ');
+  return /(?:forward|send|העבר|שלח)/i.test(labels)&&
+    !/(?:info|delete|close|cancel|back|add|attach|בטל|סגור|פרטי)/i.test(labels);
  });
- // Several nested wrappers can describe the same circle; take the innermost
- // black circle, but never choose between two separate circles.
- const inner=candidates.filter(e=>!candidates.some(other=>other!==e&&e.contains(other)));
- if(inner.length===1)return inner[0];
- // Locate the screenshot-confirmed circle by its center, then verify that
- // the actual pointer target belongs to a single black arrow control.
- const x=bounds.left+34,y=bounds.bottom-33;
+ if(named.length===1)return named[0];
+ // In this WhatsApp build the control has no semantic label and the dark
+ // background may belong to a pseudo-element, so don't depend on CSS background.
+ // Use center-point hit testing at the SCREENSHOT-CONFIRMED location, but require
+ // a uniquely matching 40-80px control containing an arrow SVG.
+ const x=bounds.left+32,y=bounds.bottom-33;
  const hit=document.elementFromPoint(x,y);
- if(hit&&dialog.contains(hit)){
-  const ancestors=[];
-  for(let e=hit;e&&e!==dialog;e=e.parentElement){
-   if(candidates.includes(e))ancestors.push(e);
+ if(!hit||!dialog.contains(hit))return null;
+ const chain=[];
+ for(let el=hit;el&&el!==dialog;el=el.parentElement){
+  if(near(el)&&el.getBoundingClientRect().left<=x&&el.getBoundingClientRect().right>=x&&
+   el.getBoundingClientRect().top<=y&&el.getBoundingClientRect().bottom>=y){
+   chain.push(el);
   }
-  if(ancestors.length&&candidates.every(e=>ancestors.includes(e)||ancestors.some(a=>a.contains(e)||e.contains(a))))
-   return ancestors[0];
  }
- return null;
+ const containsArrow=e=>{
+  const icons=[e,...e.querySelectorAll('[data-icon],svg,svg path,polygon,polyline')];
+  return icons.some(n=>{
+   const token=[attr(n,'data-icon'),attr(n,'aria-label'),attr(n,'data-testid')].join(' ');
+   return /(?:send|forward|arrow)/i.test(token)||n.tagName.toLowerCase()==='svg'&&
+    !!n.querySelector('path,polygon,polyline');
+  });
+ };
+ const candidate=chain.find(e=>containsArrow(e));
+ if(!candidate)return null;
+ // Ensure the target is the only arrow control in the bottom-left zone.
+ const siblings=elems.filter(e=>e!==candidate&&near(e)&&containsArrow(e)&&
+  !candidate.contains(e)&&!e.contains(candidate));
+ if(siblings.length)return null;
+ return candidate;
 }
 async function forwardLastTestMessage(source,target){
  if(source!==FORWARD_TEST_GROUP||target!==FORWARD_TEST_GROUP)
@@ -854,7 +862,7 @@ async function forwardLastTestMessage(source,target){
  selectedState=chosen?forwardSelectionState(dialog,chosen,target):{selected:false,reason:'recipient-not-found'};
  if(!selectedState.selected)throw Error('קבוצת הבדיקות לא אומתה כמסומנת — '+selectedState.reason);
  const confirm=forwardConfirm(dialog);
- if(!confirm)throw Error('כפתור אישור ההעברה לא זוהה. חלון: '+Math.round(dialog.getBoundingClientRect().width)+'x'+Math.round(dialog.getBoundingClientRect().height));
+ if(!confirm)throw Error('כפתור אישור ההעברה לא זוהה. חלון: '+Math.round(dialog.getBoundingClientRect().width)+'x'+Math.round(dialog.getBoundingClientRect().height)+'. '+forwardConfirmDiagnostics(dialog));
  if(!currentMatches(source))throw Error('קבוצת המקור השתנתה לפני אישור ההעברה');
  humanClick(confirm);
  await wait(1200);
@@ -862,11 +870,11 @@ async function forwardLastTestMessage(source,target){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V047'){reply({ok:true,version:'0.4.7',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V047'&&msg?.type!=='FORWARD_TEST_V047')return;
+ if(msg?.type==='WA_TEST_PING_V048'){reply({ok:true,version:'0.4.8',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V048'&&msg?.type!=='FORWARD_TEST_V048')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='FORWARD_TEST_V047'
+ const promise=msg.type==='FORWARD_TEST_V048'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
