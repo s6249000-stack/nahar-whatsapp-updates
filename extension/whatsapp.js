@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV035)return;
-globalThis.__naharSchedulerAgentV035=true;
+if(globalThis.__naharSchedulerAgentV036)return;
+globalThis.__naharSchedulerAgentV036=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -190,13 +190,22 @@ function sendButton(){
  for(const e of m.querySelectorAll('[data-icon="send"],[data-icon="send-filled"]')){const b=e.closest('button,[role="button"]');if(shown(b))return b}
  return null;
 }
-function decodeAttachment(a){
- if(!a||typeof a!=='object'||typeof a.name!=='string'||typeof a.data!=='string'||!Number.isInteger(a.size)||a.size<1||a.size>4*1024*1024)throw Error('קובץ הניסיון לא תקין');
- if(!/^[A-Za-z0-9+/]+={0,2}$/.test(a.data)||a.data.length>5800000)throw Error('קידוד הקובץ לא תקין');
- let binary;try{binary=atob(a.data)}catch{throw Error('פענוח הקובץ נכשל')}
- if(binary.length!==a.size)throw Error('גודל הקובץ שהתקבל שונה מהמקור');
- const buf=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)buf[i]=binary.charCodeAt(i);
- return new File([buf],a.name,{type:a.type||'application/octet-stream'});
+async function decodeAttachment(a){
+ if(!a||typeof a!=='object'||typeof a.id!=='string'||typeof a.name!=='string'||
+  !Number.isSafeInteger(a.size)||a.size<1||!Number.isSafeInteger(a.chunks)||a.chunks<1)
+  throw Error('נתוני הקובץ אינם תקינים');
+ const parts=[];let total=0;
+ for(let index=0;index<a.chunks;index++){
+  const result=await chrome.runtime.sendMessage({type:'FILE_CHUNK_READ',id:a.id,index});
+  if(!result?.ok||typeof result.data!=='string')throw Error('מקטע הקובץ לא התקבל מהתוסף');
+  let binary;
+  try{binary=atob(result.data)}catch{throw Error('מקטע הקובץ אינו תקין')}
+  const buffer=new Uint8Array(binary.length);
+  for(let j=0;j<binary.length;j++)buffer[j]=binary.charCodeAt(j);
+  parts.push(buffer);total+=buffer.length;
+ }
+ if(total!==a.size)throw Error('גודל הקובץ שהורכב שונה מהמקור; השליחה בוטלה');
+ return new File(parts,a.name,{type:a.type||'application/octet-stream'});
 }
 function attachButton(){
  const root=document.querySelector('#main');if(!root)return null;
@@ -243,7 +252,7 @@ function previewSend(){
  return null;
 }
 async function sendAttachment(attachment,text,name){
- const file=decodeAttachment(attachment);
+ const file=await decodeAttachment(attachment);
  const existing=[...document.querySelectorAll('input[type="file"]')];
  const attach=attachButton();
  if(attach)humanClick(attach);
@@ -289,8 +298,8 @@ async function send(text,name,attachment){
  return {ok:true};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V035'){reply({ok:true,version:'0.3.5',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(msg?.type!=='SEND_TEST_V035')return;
+ if(msg?.type==='WA_TEST_PING_V036'){reply({ok:true,version:'0.3.6',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(msg?.type!=='SEND_TEST_V036')return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
  send(msg.text,msg.group,msg.attachment).then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
