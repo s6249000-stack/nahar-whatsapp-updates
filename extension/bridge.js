@@ -11,10 +11,10 @@
   });
   window.addEventListener('message', async e => {
     if (e.source !== window || e.origin !== location.origin || e.data?.source !== source || e.data.direction !== 'page-to-extension') return;
-    if (!['SCHEDULE','FORWARD','STATUS','FILE_BEGIN','FILE_CHUNK','FILE_COMMIT','FILE_ABORT'].includes(e.data.type)) return;
+    if (!['SCHEDULE','SEND_FORWARD','FORWARD','STATUS','FILE_BEGIN','FILE_CHUNK','FILE_COMMIT','FILE_ABORT'].includes(e.data.type)) return;
     const requestId = String(e.data.requestId || '');
     try {
-      const response = await chrome.runtime.sendMessage(e.data.type==='STATUS'?{type:'STATUS_TEST'}:e.data.type==='SCHEDULE'?{type:'SCHEDULE_TEST',job:e.data.job}:e.data.type==='FORWARD'?{type:'FORWARD_TEST',job:e.data.job}:{type:e.data.type,...e.data.filePayload});
+      const response = await chrome.runtime.sendMessage(e.data.type==='STATUS'?{type:'STATUS_TEST'}:e.data.type==='SCHEDULE'?{type:'SCHEDULE_TEST',job:e.data.job}:e.data.type==='SEND_FORWARD'?{type:'SEND_FORWARD_TEST',job:e.data.job}:e.data.type==='FORWARD'?{type:'FORWARD_TEST',job:e.data.job}:{type:e.data.type,...e.data.filePayload});
       window.postMessage({source, direction:'extension-to-page', type:'RESULT', requestId, response}, location.origin);
     } catch(err) {
       window.postMessage({source, direction:'extension-to-page', type:'RESULT', requestId, response:{ok:false,error:String(err.message || err)}}, location.origin);
