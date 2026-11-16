@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV059)return;
-globalThis.__naharSchedulerAgentV059=true;
+if(globalThis.__naharSchedulerAgentV060)return;
+globalThis.__naharSchedulerAgentV060=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -933,8 +933,10 @@ function channelsHubEvidence(){
  return true;
 }
 function channelNavButton(){
- // Exact WhatsApp Channels control only. Never infer by position or scan
- // generic nav buttons — those guesses previously opened the Archive.
+ // Only the compact CHANNELS tab on the actual right-hand WhatsApp rail.
+ // A broad 145px edge test also covered the adjacent Archive panel and
+ // occasionally clicked its controls. Archive is never a valid navigation step.
+ const railLeft=window.innerWidth-82;
  const selectors=[
   '[aria-label="Channels"]','[title="Channels"]',
   '[aria-label="ערוצים"]','[title="ערוצים"]',
@@ -943,34 +945,46 @@ function channelNavButton(){
   '[data-icon*="newsletter" i]'
  ];
  const buttons=[];
- for(const sel of selectors){
-  for(const raw of document.querySelectorAll(sel)){
-   if(!shown(raw)||raw.closest('#main'))continue;
-   const r=raw.getBoundingClientRect();
-   if(r.top<18||r.top>Math.min(window.innerHeight*.55,430)||
-      !(r.left<145||r.right>window.innerWidth-145))continue;
-   const b=raw.closest('button,[role="button"],[role="tab"]')||raw;
-   if(shown(b)&&!buttons.includes(b))buttons.push(b);
-  }
+ for(const sel of selectors)for(const raw of document.querySelectorAll(sel)){
+  if(!shown(raw)||raw.closest('#main,#side,#pane-side'))continue;
+  const b=raw.closest('button,[role="button"],[role="tab"]')||raw;
+  if(!shown(b)||b.closest('#main,#side,#pane-side'))continue;
+  const r=b.getBoundingClientRect();
+  if(r.left<railLeft||r.right>window.innerWidth+3||
+     r.width<20||r.width>77||r.height<20||r.height>86||
+     r.top<18||r.top>Math.min(window.innerHeight*.55,430))continue;
+  const token=[attr(b,'aria-label'),attr(b,'title'),attr(b,'data-testid'),attr(b,'data-icon'),
+   attr(raw,'aria-label'),attr(raw,'title'),attr(raw,'data-testid'),attr(raw,'data-icon')].join(' ');
+  if(/archive|archived|ארכיון|chat-archive|status|סטטוס|updates|עדכונים/i.test(token))continue;
+  if(!buttons.includes(b))buttons.push(b);
  }
  return buttons.length===1?buttons[0]:null;
 }
+function archiveSidebarVisible(){
+ const side=document.querySelector('#side')||document.querySelector('#pane-side');
+ if(!side||!shown(side))return false;
+ const titles=[...side.querySelectorAll('h1,h2,h3,[role="heading"],span,div')]
+  .filter(shown).filter(e=>e.children.length<=1)
+  .filter(e=>/^(?:בארכיון|ארכיון|archived|archive)$/i.test(norm(e.textContent)));
+ return titles.some(e=>e.getBoundingClientRect().top<160);
+}
 async function openChannelsHub(){
  if(channelsHubEvidence())return true;
- // The Zmanim extension's strong safety rule: click ONLY an explicitly
- // labelled Channels control. No icon-order guessing; no Archive.
+ if(activeTestChannel())return true;
+ // Never attempt to navigate from an Archive sidebar. This was the visible
+ // side effect reported by the user and is irrelevant to channel forwarding.
+ if(archiveSidebarVisible())
+  throw Error('פאנל הארכיון פתוח. עצרתי ניווט כדי שלא ללחוץ בארכיון — פתח את ערוצים פעם אחת');
  const button=channelNavButton();
- if(!button)throw Error('לא זוהה כפתור ערוצים מפורש; לא ניסיתי לפתוח ארכיון או מסך אחר');
+ if(!button)throw Error('לא נמצא כפתור ערוצים מזוהה בסרגל הימני — לא נגעתי בארכיון');
  humanClick(button);
  for(let i=0;i<35;i++){
   await wait(170);
-  if(channelsHubEvidence())return true;
-  const headings=[...document.querySelectorAll('h1,h2,h3,[role="heading"]')].filter(shown)
-   .filter(e=>!e.closest('#main')).map(e=>norm(e.textContent));
-  if(headings.some(t=>/^(?:ארכיון|archive|archived)$/i.test(t)))
-   throw Error('נפתח מסך ארכיון במקום ערוצים; הפסקתי ניווט ללא פעולות נוספות');
+  if(channelsHubEvidence()||activeTestChannel())return true;
+  if(archiveSidebarVisible())
+   throw Error('WhatsApp הציג ארכיון לאחר לחיצת ניווט; עצרתי בלי לבצע בו פעולה');
  }
- throw Error('לחיצה על ערוצים לא פתחה את רשימת הערוצים — בוטל ללא ניווט נוסף');
+ throw Error('כפתור ערוצים לא פתח את רשימת הערוצים — בוטל ללא ניווט נוסף');
 }
 function channelOwnedZone(){
  const side=document.querySelector('#side')||document.querySelector('#pane-side');
@@ -1034,6 +1048,8 @@ function findMainChannelRow(){
  return rows.length>=2?rows[1].el:null;
 }
 async function openMainChannel(){
+ // If the required channel is already open, DO NOT touch the sidebar at all.
+ // WhatsApp may leave an Archive panel from prior navigation; it is unrelated.
  if(activeTestChannel())return true;
  if(!await openChannelsHub())throw Error('לא נפתחה לשונית ערוצים ב־WhatsApp Web');
  for(let turn=0;turn<10;turn++){
@@ -1238,15 +1254,15 @@ async function forwardLastChannelUpdateToTest(source,target){
  return {ok:true,detail:'בוצע ניסיון העברת העדכון האחרון מהערוץ לקבוצת הבדיקות'};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V059'){reply({ok:true,version:'0.5.9',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(!['SEND_TEST_V059','FORWARD_TEST_V059','SEND_FORWARD_TEST_V059','CHANNEL_FORWARD_TEST_V059'].includes(msg?.type))return;
+ if(msg?.type==='WA_TEST_PING_V060'){reply({ok:true,version:'0.6.0',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(!['SEND_TEST_V060','FORWARD_TEST_V060','SEND_FORWARD_TEST_V060','CHANNEL_FORWARD_TEST_V060'].includes(msg?.type))return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='CHANNEL_FORWARD_TEST_V059'
+ const promise=msg.type==='CHANNEL_FORWARD_TEST_V060'
   ?forwardLastChannelUpdateToTest(msg.source,msg.target)
-  :msg.type==='SEND_FORWARD_TEST_V059'
+  :msg.type==='SEND_FORWARD_TEST_V060'
    ?sendThenForwardTest(msg.text,msg.attachment,msg.group,msg.target)
-  :msg.type==='FORWARD_TEST_V059'
+  :msg.type==='FORWARD_TEST_V060'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
