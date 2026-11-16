@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV065)return;
-globalThis.__naharSchedulerAgentV065=true;
+if(globalThis.__naharSchedulerAgentV066)return;
+globalThis.__naharSchedulerAgentV066=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -926,20 +926,15 @@ function activeTestChannel(){
  return {root:main,header};
 }
 function channelsHubEvidence(){
- // Hub is verified in the same side panel as its search, not by any
- // "ערוצים" heading elsewhere in the page.
- const side=document.querySelector('#side')||document.querySelector('#pane-side');
- if(!side||!shown(side))return false;
- const area=side.getBoundingClientRect();
- const titles=[...document.querySelectorAll('h1,h2,h3,[role="heading"],span,div')]
-  .filter(shown).filter(e=>e.children.length<=1).filter(e=>{
-   const r=e.getBoundingClientRect(),cy=(r.top+r.bottom)/2;
-   return cy>=area.top&&cy<Math.min(area.top+220,area.bottom)&&
-    r.left<area.right&&r.right>area.left;
-  }).map(e=>norm(e.textContent));
- if(titles.some(t=>/^(?:ארכיון|בארכיון|archive|archived)$/i.test(t)))return false;
- return titles.some(t=>/^(?:ערוצים|channels)$/i.test(t));
+ const headings=[...document.querySelectorAll('h1,h2,h3,[role="heading"]')]
+  .filter(shown).filter(e=>!e.closest('#main'));
+ if(!headings.some(e=>/^(?:ערוצים|channels)$/i.test(norm(e.textContent))))return false;
+ if(headings.some(e=>/^(?:ארכיון|archive|archived)$/i.test(norm(e.textContent))))return false;
+ return true;
 }
+// The Channels icon is on the far-right WhatsApp navigation rail. Its
+// tooltip says "ערוצים" in the user's screenshot. Archive is a chat-list
+// entry and must never be treated as a tab.
 const railControls=()=>[...document.querySelectorAll('button,[role="button"],[role="tab"]')]
  .filter(shown).filter(e=>!e.closest('#main,#side,#pane-side'))
  .filter(e=>{
@@ -1006,82 +1001,63 @@ async function openChannelsHub(){
 // owned Channels list is ONLY between Channels search and
 // "חיפוש ערוצים למעקב". Never use Archive/chat rows as candidates.
 function channelOwnedZone(){
- if(!channelsHubEvidence())return null;
  const side=document.querySelector('#side')||document.querySelector('#pane-side');
- if(!side||!shown(side))return null;
- const sr=side.getBoundingClientRect();
- // The Channels search is sometimes outside #side itself, and does not
- // always expose role=searchbox. Prefer a search near the Channels heading.
- const inputs=[...document.querySelectorAll('input[type="text"],[role="searchbox"],div[contenteditable="true"][role="textbox"]')]
-  .filter(shown).filter(e=>{
-   const r=e.getBoundingClientRect(),meta=[
-    attr(e,'placeholder'),attr(e,'aria-label'),attr(e,'aria-placeholder')
-   ].join(' ');
-   return /search|חיפוש/i.test(meta)&&r.left>=sr.left-30&&r.right<=sr.right+50&&r.top<380;
-  }).sort((x,y)=>x.getBoundingClientRect().top-y.getBoundingClientRect().top);
- const input=inputs[0];
- if(!input)return null;
- const r=input.getBoundingClientRect();
- const heading=[...document.querySelectorAll('div,span,h1,h2,h3,[role="heading"]')]
-  .filter(shown).filter(e=>/^(?:חיפוש ערוצים למעקב|find channels to follow|channels to follow)$/i.test(norm(e.innerText||e.textContent)))
-  .filter(e=>{
-   const q=e.getBoundingClientRect();
-   return q.top>r.bottom&&Math.abs((q.left+q.right-r.left-r.right)/2)<260;
-  }).sort((x,y)=>x.getBoundingClientRect().top-y.getBoundingClientRect().top)[0];
- const next=heading?.getBoundingClientRect();
- const zone={left:Math.max(sr.left,r.left-80),right:Math.min(sr.right,r.right+80),
-  top:r.bottom+5,bottom:next?next.top-8:Math.min(sr.bottom,r.bottom+265)};
- return zone.bottom>zone.top+45?zone:null;
+ if(!side||!channelsHubEvidence())return null;
+ const search=[...side.querySelectorAll('input[type="text"],[role="searchbox"],[role="textbox"],[contenteditable="true"]')]
+  .filter(shown).find(e=>/search|חיפוש/i.test([attr(e,'placeholder'),attr(e,'aria-label'),attr(e,'aria-placeholder')].join(' ')));
+ if(!search)return null;
+ const r=search.getBoundingClientRect(),sideRect=side.getBoundingClientRect();
+ const headings=[...side.querySelectorAll('h1,h2,h3,[role="heading"],div,span')].filter(shown)
+  .filter(e=>/^(?:חיפוש ערוצים למעקב|find channels to follow|channels to follow)$/i.test(norm(e.textContent)));
+ const follow=headings.filter(e=>e.getBoundingClientRect().top>r.bottom)
+  .sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top)[0];
+ return {left:Math.max(sideRect.left,r.left-80),right:Math.min(sideRect.right,r.right+80),
+  top:r.bottom+4,bottom:Math.min(sideRect.bottom,follow?follow.getBoundingClientRect().top-8:r.bottom+280)};
 }
 function channelOwnedRows(){
  const zone=channelOwnedZone();
- if(!zone)return [];
- const nodes=[...document.querySelectorAll('[role="listitem"],[role="row"],[tabindex="0"],[tabindex="-1"],li,a,button,div')];
- const candidates=[];
- for(const e of nodes){
+ if(!zone||zone.bottom<=zone.top+40)return [];
+ const side=document.querySelector('#side')||document.querySelector('#pane-side');
+ const matches=[];
+ for(const e of side.querySelectorAll('[role="row"],[role="listitem"],[tabindex="0"],[tabindex="-1"],div,li,a')){
   if(!shown(e)||e.closest('#main'))continue;
   const r=e.getBoundingClientRect(),cy=(r.top+r.bottom)/2;
-  if(cy<zone.top||cy>zone.bottom||r.width<260||r.height<46||r.height>125)continue;
+  if(cy<zone.top||cy>zone.bottom||r.width<235||r.height<42||r.height>135)continue;
   if(r.right<zone.left||r.left>zone.right)continue;
-  const txt=norm(e.innerText||e.textContent||'');
-  if(/חיפוש ערוצים למעקב|find channels to follow|יצירת ערוץ|create channel|ארכיון|archived/i.test(txt))continue;
-  // Critically require an IMG avatar, not a generic SVG (Archive buttons
-  // and sidebar affordances also carry SVGs).
-  const hasAvatar=!!e.querySelector('img,[role="img"]');
-  const hasTime=/\b\d{1,2}:\d{2}\b/.test(txt);
-  if(!hasAvatar&&!hasTime)continue;
-  candidates.push({el:e,top:r.top,height:r.height,name:txt});
+  const name=norm(e.innerText||e.textContent);
+  if(/^(?:channels|ערוצים|search|חיפוש)$|חיפוש ערוצים למעקב|find channels to follow|יצירת ערוץ|create channel/i.test(name))continue;
+  if(!e.querySelector('img,[role="img"],svg')&&!/\b\d{1,2}:\d{2}\b/.test(name))continue;
+  matches.push({el:e,top:r.top,height:r.height,name});
  }
- candidates.sort((x,y)=>x.top-y.top||x.height-y.height);
+ matches.sort((x,y)=>x.top-y.top||x.height-y.height);
  const rows=[];
- for(const c of candidates){
-  const existing=rows.find(x=>Math.abs(x.top-c.top)<12);
-  if(!existing)rows.push(c);
-  else if(c.height<existing.height)Object.assign(existing,c);
+ for(const item of matches){
+  const at=rows.findIndex(x=>Math.abs(x.top-item.top)<12);
+  if(at<0)rows.push(item);
+  else if(item.height<rows[at].height)rows[at]=item;
  }
  return rows;
 }
 function findMainChannelRow(){
  const zone=channelOwnedZone();
  if(!zone)return null;
+ const side=document.querySelector('#side')||document.querySelector('#pane-side');
  const stable=lexical(CHANNEL_STABLE_PREFIX);
- const leaves=[...document.querySelectorAll('span,[dir="auto"],[title],[aria-label],div')]
+ const leaves=[...side.querySelectorAll('span,[dir="auto"],[title],[aria-label],div')]
   .filter(shown).filter(e=>{
    const r=e.getBoundingClientRect(),cy=(r.top+r.bottom)/2;
-   if(cy<zone.top||cy>zone.bottom||r.left>zone.right||r.right<zone.left)return false;
-   const text=lexical(attr(e,'title')||attr(e,'aria-label')||(e.children.length?'':e.textContent));
-   return text.startsWith(stable);
-  }).sort((x,y)=>x.children.length-y.children.length);
+   return cy>=zone.top&&cy<=zone.bottom&&r.left<zone.right&&r.right>zone.left&&
+    lexical(attr(e,'title')||attr(e,'aria-label')||(e.children.length?'':e.textContent)).startsWith(stable);
+  }).sort((a,b)=>a.children.length-b.children.length);
  for(const leaf of leaves){
-  for(let n=leaf,i=0;n&&i<7;n=n.parentElement,i++){
-   const r=n.getBoundingClientRect(),cy=(r.top+r.bottom)/2;
-   if(cy<zone.top||cy>zone.bottom||r.height>150)break;
-   if(r.height>=46&&r.height<=125&&r.width>=260)return n;
+  let node=leaf;
+  for(let i=0;i<8&&node&&node!==side;i++,node=node.parentElement){
+   const r=node.getBoundingClientRect();
+   if(r.width>=235&&r.height>=42&&r.height<=135)return node;
   }
  }
- // Same strict second owned-channel row as the uploaded Zmanim extension,
- // only after the Channels heading, search input, avatar and owned area
- // are independently verified. Never pick the second row of an Archive pane.
+ // Source extension's guarded fallback: main channel is SECOND within the
+ // owned channels between search and "channels to follow". Never sidebar global.
  const rows=channelOwnedRows();
  return rows.length>=2?rows[1].el:null;
 }
@@ -1089,7 +1065,7 @@ async function openMainChannel(){
  // The 0.6.2 workflow was confirmed to forward correctly. Preserve its
  // channel discovery and do not click the sidebar again after a channel is open.
  if(activeTestChannel())return true;
- if(!await openChannelsHub())throw Error('לא נפתחה לשונית ערוצים ב־WhatsApp Web');
+ if(!await openChannelsHub())throw Error('שלב CHANNEL_HUB: לא נפתחה לשונית ערוצים ב־WhatsApp Web');
  for(let turn=0;turn<10;turn++){
   const row=findMainChannelRow();
   if(row){
@@ -1103,7 +1079,7 @@ async function openMainChannel(){
   }
   await wait(320);
  }
- throw Error('רשימת הערוצים נפתחה, אך הערוץ הראשי לא זוהה. לא בוצעה העברה');
+ throw Error('שלב CHANNEL_ROW: לשונית הערוצים נפתחה אך הערוץ הראשי לא זוהה. לא בוצעה העברה');
 }
 function channelForwardCandidates(view){
  const root=view.root,feed=root.getBoundingClientRect(),header=view.header.getBoundingClientRect();
@@ -1259,14 +1235,14 @@ async function forwardLastChannelUpdateToTest(source,target){
    actions=channelForwardCandidates(channel);
   }
  }
- if(!actions.length)throw Error('הערוץ פתוח, אך לא נמצא כפתור העברה גלוי ליד עדכון. פעולות העברה '+actions.length);
+ if(!actions.length)throw Error('שלב CHANNEL_ARROW: הערוץ פתוח אך חץ העברה לא זוהה, מועמדים '+actions.length);
  // WhatsApp documents a dedicated Forward arrow next to each channel update.
  // Last visible button at feed bottom corresponds to the last update.
  const button=actions.at(-1);
  if(!activeTestChannel())throw Error('הערוץ השתנה לפני בחירת העדכון');
  let dialog=await openForwardPickerFromChannelArrow(channel,button);
  dialog=await stableForwardDialog();
- if(!dialog)throw Error('חלון בחירת היעד מהערוץ לא התייצב');
+ if(!dialog)throw Error('שלב CHANNEL_PICKER: חלון בחירת היעד מהערוץ לא התייצב');
  const input=[...dialog.querySelectorAll('input,[contenteditable="true"],[role="textbox"]')].find(shown);
  if(input&&!readSearch(input).trim())setSearch(input,'פנימי שמעון נוה');
  let clicked=false;
@@ -1291,15 +1267,15 @@ async function forwardLastChannelUpdateToTest(source,target){
  return {ok:true,detail:'בוצע ניסיון העברת העדכון האחרון מהערוץ לקבוצת הבדיקות'};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V065'){reply({ok:true,version:'0.6.5',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(!['SEND_TEST_V065','FORWARD_TEST_V065','SEND_FORWARD_TEST_V065','CHANNEL_FORWARD_TEST_V065'].includes(msg?.type))return;
+ if(msg?.type==='WA_TEST_PING_V066'){reply({ok:true,version:'0.6.6',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(!['SEND_TEST_V066','FORWARD_TEST_V066','SEND_FORWARD_TEST_V066','CHANNEL_FORWARD_TEST_V066'].includes(msg?.type))return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='CHANNEL_FORWARD_TEST_V065'
+ const promise=msg.type==='CHANNEL_FORWARD_TEST_V066'
   ?forwardLastChannelUpdateToTest(msg.source,msg.target)
-  :msg.type==='SEND_FORWARD_TEST_V065'
+  :msg.type==='SEND_FORWARD_TEST_V066'
    ?sendThenForwardTest(msg.text,msg.attachment,msg.group,msg.target)
-  :msg.type==='FORWARD_TEST_V065'
+  :msg.type==='FORWARD_TEST_V066'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
