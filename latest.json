@@ -1,5 +1,5 @@
 {
-  "version": "0.5.4",
+  "version": "0.5.5",
   "files": [
     "manifest.json",
     "background.js",
@@ -7,5 +7,5 @@
     "whatsapp.js"
   ],
   "description": "Public extension code only; no session data or private targets",
-  "updated": "2026-11-15"
+  "updated": "2026-11-16"
 }
