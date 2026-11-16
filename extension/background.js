@@ -51,10 +51,10 @@ async function probeWhatsappTab(tab){
  for(let i=0;i<24;i++){
   try{
    let pong;
-   try{pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V055'});}
+   try{pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V056'});}
    catch(e){
     await chrome.scripting.executeScript({target:{tabId:tab.id},files:['whatsapp.js']});
-    pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V055'});
+    pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V056'});
    }
    if(pong?.ok&&(pong.hasSide||pong.hasMain))return pong;
    lastError='WhatsApp Web עדיין טוען את רשימת השיחות';
@@ -208,7 +208,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse)=>{
   if(!sender.url?.startsWith('https://nahar-shalom-tools.pages.dev/tools/whatsapp-scheduler/')) throw Error('מקור הבקשה אינו מורשה');
   const job=msg.job||{};
   if(msg.type==='CHANNEL_FORWARD_TEST'){
-   const source='ידידי ישיבת המקובלים',target='🏷️ פנימי שמעון נוה 🔖';
+   const source='ידידי ישיבת המקובלים נהר שלום המקובל הרב  בניהו שמואלי שליט"א',target='🏷️ פנימי שמעון נוה 🔖';
    if(job.source!==source||job.target!==target)throw Error('ניסוי הערוץ מורשה רק אל קבוצת הבדיקות');
    const old=await chrome.storage.local.get([JOB,GROUP_LOCK]);
    if(['processing','scheduled'].includes(old[JOB]?.phase))throw Error('יש ניסיון פעיל אחר');
@@ -290,7 +290,7 @@ async function sendDueJob(expectedId){
   await probeWhatsappTab(tab);
   // Exactly one send attempt; errors are not automatically retried to avoid duplicate WhatsApp messages.
   let result;
-  try{result=await chrome.tabs.sendMessage(tab.id,job.kind==='channel_forward'?{type:'CHANNEL_FORWARD_TEST_V055',source:job.source,target:job.target,id:job.id}:job.kind==='forward'?{type:'FORWARD_TEST_V055',source:job.source,target:job.target,id:job.id}:job.kind==='send_forward'?{type:'SEND_FORWARD_TEST_V055',group:job.group,target:job.target,text:job.text,attachment:job.attachment,id:job.id}:{type:'SEND_TEST_V055',group:job.group,text:job.text,attachment:job.attachment,id:job.id});}
+  try{result=await chrome.tabs.sendMessage(tab.id,job.kind==='channel_forward'?{type:'CHANNEL_FORWARD_TEST_V056',source:job.source,target:job.target,id:job.id}:job.kind==='forward'?{type:'FORWARD_TEST_V056',source:job.source,target:job.target,id:job.id}:job.kind==='send_forward'?{type:'SEND_FORWARD_TEST_V056',group:job.group,target:job.target,text:job.text,attachment:job.attachment,id:job.id}:{type:'SEND_TEST_V056',group:job.group,text:job.text,attachment:job.attachment,id:job.id});}
   catch(error){throw Error('חיבור התוסף ללשונית אבד בזמן השליחה: '+String(error?.message||error).slice(0,180));}
   if(!result)throw Error('WhatsApp Web לא החזיר תשובה מניסיון השליחה');
   if(!result.ok){const err=new Error(result.error||'השליחה לא אושרה');err.metrics=result.metrics;throw err;}
