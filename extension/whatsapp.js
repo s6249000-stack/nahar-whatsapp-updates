@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV054)return;
-globalThis.__naharSchedulerAgentV054=true;
+if(globalThis.__naharSchedulerAgentV055)return;
+globalThis.__naharSchedulerAgentV055=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -884,14 +884,122 @@ async function sendThenForwardTest(text,attachment,group,target){
   throw Error('השליחה בוצעה, אך ההעברה נכשלה: '+String(e.message||e));
  }
 }
+
+// Experimental channel -> test-group transfer. Kept isolated from the
+// 0.5.4 tested group send/forward workflows.
+const CHANNEL_TITLE_PREFIX='ידידי ישיבת המקובלים';
+function activeTestChannel(){
+ const expected=lexical(CHANNEL_TITLE_PREFIX);
+ const headers=[...document.querySelectorAll('#main header,[role="main"] header,header')]
+  .filter(shown).filter(h=>{
+   const box=h.getBoundingClientRect();
+   return box.width>260&&box.left>window.innerWidth*.20&&box.top<240;
+  }).filter(h=>{
+   const names=[...h.querySelectorAll('[title],[aria-label],[dir="auto"]')]
+    .filter(shown).map(e=>lexical(attr(e,'title')||attr(e,'aria-label')||(e.children.length?'':e.textContent)));
+   return names.some(v=>v.includes(expected));
+  });
+ if(headers.length!==1)return null;
+ const header=headers[0];
+ // The header must belong to the opened main content, not a channel search
+ // result or sidebar. The name is intentionally partial; the exact channel
+ // heading must be visibly present and unmistakably contain the brand.
+ const root=header.closest('#main,[role="main"]')||null;
+ if(!root||!shown(root))return null;
+ return {root,header};
+}
+function channelForwardCandidates(view){
+ const area=view.root,heading=view.header.getBoundingClientRect();
+ const matches=[...area.querySelectorAll('button,[role="button"],[aria-label],[title],[data-testid],[data-icon]')]
+  .filter(forwardVisible).filter(e=>!e.closest('header,footer,[role="dialog"],[role="menu"]'))
+  .filter(e=>{
+   const token=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),attr(e,'data-icon')].join(' ');
+   return /(?:forward|העבר(?:ה)?)/i.test(token)&&!/(?:forwarded count|forward-count|הועבר פעמים)/i.test(token);
+  }).map(e=>e.closest('button,[role="button"]')||e)
+  .filter(e=>{
+   const rect=e.getBoundingClientRect();
+   return rect.width>12&&rect.height>12&&rect.top>heading.bottom+20&&
+    rect.left>view.root.getBoundingClientRect().left+8&&rect.bottom<window.innerHeight;
+  });
+ const unique=[...new Set(matches)];
+ return unique.filter(e=>!unique.some(x=>x!==e&&e.contains(x))).sort((x,y)=>{
+  const a=x.getBoundingClientRect(),b=y.getBoundingClientRect();
+  return a.top-b.top||a.left-b.left;
+ });
+}
+async function forwardLastChannelUpdateToTest(source,target){
+ if(source!==CHANNEL_TITLE_PREFIX||target!==FORWARD_TEST_GROUP)
+  throw Error('ניסוי ערוץ מורשה רק מהערוץ המוגדר אל קבוצת הבדיקות');
+ const channel=activeTestChannel();
+ if(!channel)throw Error('ערוץ המקור לא פתוח ב־WhatsApp Web. פתח את הערוץ "ידידי ישיבת המקובלים" לפני הניסוי');
+ // Only inspect the feed. No send is permitted until the exact group has
+ // been visibly selected in WhatsApp's native forwarding dialog.
+ const scrollable=[...channel.root.querySelectorAll('*')].filter(shown).filter(e=>{
+  const cs=getComputedStyle(e);
+  return /auto|scroll/.test(cs.overflowY)&&e.clientHeight>160&&e.scrollHeight>e.clientHeight+100;
+ }).sort((x,y)=>y.clientHeight-x.clientHeight)[0];
+ if(scrollable){
+  scrollable.scrollTop=scrollable.scrollHeight;
+  scrollable.dispatchEvent(new Event('scroll',{bubbles:true}));
+  await wait(600);
+ }
+ let actions=channelForwardCandidates(channel);
+ if(!actions.length){
+  const posts=[...channel.root.querySelectorAll('article,[data-testid*="channel-update"],[data-testid*="channel-message"],[data-testid*="update-container"],[data-id]')]
+   .filter(shown).filter(e=>!e.closest('header,footer,[role="dialog"]'));
+  const last=posts.at(-1);
+  if(last){
+   last.scrollIntoView({block:'end'});
+   last.dispatchEvent(new MouseEvent('mouseover',{bubbles:true,view:window}));
+   last.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,view:window,pointerType:'mouse'}));
+   await wait(500);
+   actions=channelForwardCandidates(channel);
+  }
+ }
+ if(!actions.length)throw Error('הערוץ פתוח, אך לא נמצא כפתור העברה גלוי ליד עדכון. פעולות העברה '+actions.length);
+ // WhatsApp documents a dedicated Forward arrow next to each channel update.
+ // Last visible button at feed bottom corresponds to the last update.
+ const button=actions.at(-1);
+ if(!activeTestChannel())throw Error('הערוץ השתנה לפני בחירת העדכון');
+ humanClick(button);
+ let dialog=null;
+ for(let i=0;i<22;i++){dialog=forwardingDialog();if(dialog)break;await wait(170)}
+ if(!dialog)throw Error('נלחץ חץ העברה בערוץ, אך חלון בחירת קבוצת יעד לא נפתח');
+ dialog=await stableForwardDialog();
+ if(!dialog)throw Error('חלון בחירת היעד מהערוץ לא התייצב');
+ const input=[...dialog.querySelectorAll('input,[contenteditable="true"],[role="textbox"]')].find(shown);
+ if(input&&!readSearch(input).trim())setSearch(input,'פנימי שמעון נוה');
+ let clicked=false;
+ for(let i=0;i<32;i++){
+  dialog=await stableForwardDialog(1)||dialog;
+  const selected=forwardChoice(dialog,target);
+  if(selected){
+   if(forwardSelectionState(dialog,selected,target).selected)break;
+   if(!clicked){humanClick(selected);clicked=true}
+  }
+  await wait(170);
+ }
+ dialog=await stableForwardDialog(2);
+ const row=dialog&&forwardChoice(dialog,target);
+ if(!row||!forwardSelectionState(dialog,row,target).selected)
+  throw Error('קבוצת הבדיקות לא זוהתה כיעד מסומן — לא בוצעה העברה מהערוץ');
+ const confirm=forwardConfirm(dialog);
+ if(!confirm)throw Error('קבוצת היעד מסומנת, אך חץ אישור ההעברה לא זוהה. '+forwardConfirmDiagnostics(dialog));
+ humanClick(confirm);
+ await wait(1150);
+ if(forwardingDialog())throw Error('חלון ההעברה נשאר פתוח — אין אישור שהניסיון הושלם');
+ return {ok:true,detail:'בוצע ניסיון העברת העדכון האחרון מהערוץ לקבוצת הבדיקות'};
+}
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V054'){reply({ok:true,version:'0.5.4',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(!['SEND_TEST_V054','FORWARD_TEST_V054','SEND_FORWARD_TEST_V054'].includes(msg?.type))return;
+ if(msg?.type==='WA_TEST_PING_V055'){reply({ok:true,version:'0.5.5',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(!['SEND_TEST_V055','FORWARD_TEST_V055','SEND_FORWARD_TEST_V055','CHANNEL_FORWARD_TEST_V055'].includes(msg?.type))return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='SEND_FORWARD_TEST_V054'
-  ?sendThenForwardTest(msg.text,msg.attachment,msg.group,msg.target)
-  :msg.type==='FORWARD_TEST_V054'
+ const promise=msg.type==='CHANNEL_FORWARD_TEST_V055'
+  ?forwardLastChannelUpdateToTest(msg.source,msg.target)
+  :msg.type==='SEND_FORWARD_TEST_V055'
+   ?sendThenForwardTest(msg.text,msg.attachment,msg.group,msg.target)
+  :msg.type==='FORWARD_TEST_V055'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
