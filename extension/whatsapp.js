@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV057)return;
-globalThis.__naharSchedulerAgentV057=true;
+if(globalThis.__naharSchedulerAgentV058)return;
+globalThis.__naharSchedulerAgentV058=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -1141,6 +1141,59 @@ function channelForwardCandidates(view){
   Math.abs(x.c.rect.left-top.c.rect.left)>12))return [];
  return [top.c.el];
 }
+async function channelTrustedPointer(x,y,button='left'){
+ const result=await chrome.runtime.sendMessage({type:'WA_CHANNEL_POINTER_V058',button,x,y});
+ if(!result?.ok)throw Error('WhatsApp לא אישר לחיצה על חץ ההעברה: '+(result?.error||'אין תשובה'));
+}
+async function waitChannelForwardDialog(){
+ for(let i=0;i<22;i++){
+  const dialog=forwardingDialog();
+  if(dialog)return dialog;
+  await wait(160);
+ }
+ return null;
+}
+function channelCardForArrow(root,arrow){
+ const b=arrow.getBoundingClientRect(),rootBox=root.getBoundingClientRect();
+ const candidates=[...root.querySelectorAll('article,[data-id],[data-testid*="channel-update"],[data-testid*="channel-message"],[data-testid*="message"]')]
+  .filter(shown).map(el=>({el,r:el.getBoundingClientRect()}))
+  .filter(x=>x.r.width>=270&&x.r.width<=800&&x.r.height>=100&&
+    x.r.bottom<=b.top+18&&x.r.bottom>=b.top-65&&
+    Math.abs(x.r.right-b.right)<100&&x.r.top>rootBox.top+60)
+  .sort((a,b)=>b.r.bottom-a.r.bottom);
+ return candidates[0]||null;
+}
+function channelMenuDiagnostic(){
+ const menu=[...document.querySelectorAll('[role="menu"],[role="menuitem"],[data-testid*="menu"]')].filter(shown);
+ return 'רכיבי תפריט גלויים '+menu.length;
+}
+async function openForwardPickerFromChannelArrow(channel,arrow){
+ if(!activeTestChannel())throw Error('ערוץ המקור אינו פתוח לפני הלחיצה');
+ const r=arrow.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;
+ if(!document.elementFromPoint(x,y))throw Error('כפתור ההעברה אינו גלוי ללחיצה');
+ // Trusted browser click; this control does not react to synthetic .click().
+ await channelTrustedPointer(x,y);
+ let dialog=await waitChannelForwardDialog();
+ if(dialog)return dialog;
+ // Prefer the user's alternate right-click method if the inline arrow fails,
+ // but only when we can identify the same last channel card unambiguously.
+ const card=channelCardForArrow(channel.root,arrow);
+ if(!card)throw Error('לחיצה אמיתית על חץ העדכון לא פתחה בחירת יעד; לא זוהה כרטיס עדכון בטוח לקליק ימני. '+channelMenuDiagnostic());
+ const rx=Math.max(card.r.left+45,Math.min(card.r.right-90,card.r.left+card.r.width*.65));
+ const ry=card.r.top+Math.min(85,Math.max(45,card.r.height*.2));
+ if(!activeTestChannel())throw Error('הערוץ השתנה לפני ניסיון קליק ימני');
+ await channelTrustedPointer(rx,ry,'right');
+ for(let i=0;i<18;i++){
+  const menu=expectedForwardMenu();
+  if(menu){humanClick(menu);break}
+  dialog=forwardingDialog();
+  if(dialog)return dialog;
+  await wait(150);
+ }
+ dialog=await waitChannelForwardDialog();
+ if(!dialog)throw Error('החץ וקליק ימני לא פתחו חלון העברה. '+channelMenuDiagnostic());
+ return dialog;
+}
 async function forwardLastChannelUpdateToTest(source,target){
  if(source!==CHANNEL_TITLE_PREFIX||target!==FORWARD_TEST_GROUP)
   throw Error('ניסוי ערוץ מורשה רק מהערוץ המוגדר אל קבוצת הבדיקות');
@@ -1176,10 +1229,7 @@ async function forwardLastChannelUpdateToTest(source,target){
  // Last visible button at feed bottom corresponds to the last update.
  const button=actions.at(-1);
  if(!activeTestChannel())throw Error('הערוץ השתנה לפני בחירת העדכון');
- humanClick(button);
- let dialog=null;
- for(let i=0;i<22;i++){dialog=forwardingDialog();if(dialog)break;await wait(170)}
- if(!dialog)throw Error('נלחץ חץ העברה בערוץ, אך חלון בחירת קבוצת יעד לא נפתח');
+ let dialog=await openForwardPickerFromChannelArrow(channel,button);
  dialog=await stableForwardDialog();
  if(!dialog)throw Error('חלון בחירת היעד מהערוץ לא התייצב');
  const input=[...dialog.querySelectorAll('input,[contenteditable="true"],[role="textbox"]')].find(shown);
@@ -1206,15 +1256,15 @@ async function forwardLastChannelUpdateToTest(source,target){
  return {ok:true,detail:'בוצע ניסיון העברת העדכון האחרון מהערוץ לקבוצת הבדיקות'};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V057'){reply({ok:true,version:'0.5.7',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(!['SEND_TEST_V057','FORWARD_TEST_V057','SEND_FORWARD_TEST_V057','CHANNEL_FORWARD_TEST_V057'].includes(msg?.type))return;
+ if(msg?.type==='WA_TEST_PING_V058'){reply({ok:true,version:'0.5.8',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(!['SEND_TEST_V058','FORWARD_TEST_V058','SEND_FORWARD_TEST_V058','CHANNEL_FORWARD_TEST_V058'].includes(msg?.type))return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='CHANNEL_FORWARD_TEST_V057'
+ const promise=msg.type==='CHANNEL_FORWARD_TEST_V058'
   ?forwardLastChannelUpdateToTest(msg.source,msg.target)
-  :msg.type==='SEND_FORWARD_TEST_V057'
+  :msg.type==='SEND_FORWARD_TEST_V058'
    ?sendThenForwardTest(msg.text,msg.attachment,msg.group,msg.target)
-  :msg.type==='FORWARD_TEST_V057'
+  :msg.type==='FORWARD_TEST_V058'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
