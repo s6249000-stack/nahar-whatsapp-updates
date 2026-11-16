@@ -51,10 +51,10 @@ async function probeWhatsappTab(tab){
  for(let i=0;i<24;i++){
   try{
    let pong;
-   try{pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V057'});}
+   try{pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V058'});}
    catch(e){
     await chrome.scripting.executeScript({target:{tabId:tab.id},files:['whatsapp.js']});
-    pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V057'});
+    pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V058'});
    }
    if(pong?.ok&&(pong.hasSide||pong.hasMain))return pong;
    lastError='WhatsApp Web עדיין טוען את רשימת השיחות';
@@ -194,6 +194,44 @@ chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
  return true;
 });
 
+// Trusted pointer click is limited to the current channel-forwarding pilot.
+// WhatsApp channel SVG forward control requires a real pointer event; synthetic
+// DOM clicks can be ignored. This is NOT permitted for generic sends.
+async function channelTrustedClick(sender,msg){
+ const job=(await chrome.storage.local.get(JOB))[JOB];
+ if(!job||job.phase!=='processing'||job.kind!=='channel_forward'||
+    job.source!=='ידידי ישיבת המקובלים נהר שלום המקובל הרב  בניהו שמואלי שליט"א'||
+    job.target!=='🏷️ פנימי שמעון נוה 🔖'||
+    !sender.tab?.id||!sender.url?.startsWith('https://web.whatsapp.com/'))
+  throw Error('לחיצת ערוץ נחסמה: אין ניסוי העברה מורשה פעיל');
+ if(!['left','right'].includes(msg.button)||!Number.isFinite(msg.x)||!Number.isFinite(msg.y)||
+    msg.x<0||msg.y<0||msg.x>3000||msg.y>2200)
+  throw Error('נקודת לחיצת הערוץ אינה תקינה');
+ if(trustedTyping)throw Error('פעולת דפדפן אחרת כבר מתבצעת');
+ const tab=await chrome.tabs.get(sender.tab.id);
+ if(!tab.active||!tab.url?.startsWith('https://web.whatsapp.com/'))
+  throw Error('לשונית WhatsApp אינה פעילה');
+ const dbg={tabId:sender.tab.id},button=msg.button,buttons=button==='right'?2:1;
+ trustedTyping=true;
+ let attached=false;
+ try{
+  await chrome.debugger.attach(dbg,'1.3');attached=true;
+  const x=Math.round(msg.x),y=Math.round(msg.y);
+  await chrome.debugger.sendCommand(dbg,'Input.dispatchMouseEvent',{type:'mouseMoved',x,y,modifiers:0});
+  await chrome.debugger.sendCommand(dbg,'Input.dispatchMouseEvent',{type:'mousePressed',x,y,button,buttons,clickCount:1});
+  await chrome.debugger.sendCommand(dbg,'Input.dispatchMouseEvent',{type:'mouseReleased',x,y,button,buttons:0,clickCount:1});
+  return {ok:true};
+ }finally{
+  if(attached)try{await chrome.debugger.detach(dbg)}catch{}
+  trustedTyping=false;
+ }
+}
+chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
+ if(msg?.type!=='WA_CHANNEL_POINTER_V058')return;
+ channelTrustedClick(sender,msg).then(reply,e=>reply({ok:false,error:String(e.message||e)}));
+ return true;
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse)=>{
  if(!['SCHEDULE_TEST','FORWARD_TEST','SEND_FORWARD_TEST','CHANNEL_FORWARD_TEST','STATUS_TEST'].includes(msg?.type)) return;
  if(msg.type==='STATUS_TEST'){
@@ -290,7 +328,7 @@ async function sendDueJob(expectedId){
   await probeWhatsappTab(tab);
   // Exactly one send attempt; errors are not automatically retried to avoid duplicate WhatsApp messages.
   let result;
-  try{result=await chrome.tabs.sendMessage(tab.id,job.kind==='channel_forward'?{type:'CHANNEL_FORWARD_TEST_V057',source:job.source,target:job.target,id:job.id}:job.kind==='forward'?{type:'FORWARD_TEST_V057',source:job.source,target:job.target,id:job.id}:job.kind==='send_forward'?{type:'SEND_FORWARD_TEST_V057',group:job.group,target:job.target,text:job.text,attachment:job.attachment,id:job.id}:{type:'SEND_TEST_V057',group:job.group,text:job.text,attachment:job.attachment,id:job.id});}
+  try{result=await chrome.tabs.sendMessage(tab.id,job.kind==='channel_forward'?{type:'CHANNEL_FORWARD_TEST_V058',source:job.source,target:job.target,id:job.id}:job.kind==='forward'?{type:'FORWARD_TEST_V058',source:job.source,target:job.target,id:job.id}:job.kind==='send_forward'?{type:'SEND_FORWARD_TEST_V058',group:job.group,target:job.target,text:job.text,attachment:job.attachment,id:job.id}:{type:'SEND_TEST_V058',group:job.group,text:job.text,attachment:job.attachment,id:job.id});}
   catch(error){throw Error('חיבור התוסף ללשונית אבד בזמן השליחה: '+String(error?.message||error).slice(0,180));}
   if(!result)throw Error('WhatsApp Web לא החזיר תשובה מניסיון השליחה');
   if(!result.ok){const err=new Error(result.error||'השליחה לא אושרה');err.metrics=result.metrics;throw err;}
