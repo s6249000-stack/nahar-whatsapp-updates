@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV058)return;
-globalThis.__naharSchedulerAgentV058=true;
+if(globalThis.__naharSchedulerAgentV059)return;
+globalThis.__naharSchedulerAgentV059=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -633,7 +633,7 @@ async function openForwardFromMessage(row){
 function forwardingDialog(){
  // Return the stable chat-selector region, even before a destination has been
  // selected. Requiring a footer recipient chip caused the 0.4.9 regression.
- const heading=/^(?:העברת הודעה אל|העבר הודעה אל|Forward message to|Forward to|העבר אל)$/i;
+ const heading=/^(?:העברת הודעה אל|העבר הודעה אל|העברת העדכון אל|העבר את העדכון אל|Forward message to|Forward update to|Forward to|העבר אל)$/i;
  const headings=[...document.querySelectorAll('h1,h2,h3,[role="heading"],span,div')]
   .filter(shown).filter(e=>e.children.length<=2&&heading.test(norm(e.textContent)));
  const matches=[];
@@ -933,62 +933,44 @@ function channelsHubEvidence(){
  return true;
 }
 function channelNavButton(){
- const nodes=[...document.querySelectorAll('button,[role="button"],[role="tab"],[aria-label],[title],[data-icon]')]
-  .filter(shown).filter(e=>!e.closest('#main'));
- const out=[];
- for(const el of nodes){
-  const r=el.getBoundingClientRect();
-  if(r.width<16||r.height<16||r.top<15||r.top>Math.min(window.innerHeight*.55,430))continue;
-  if(!(r.left<145||r.right>window.innerWidth-145))continue;
-  const meta=[attr(el,'aria-label'),attr(el,'title'),attr(el,'data-testid'),attr(el,'data-icon')].join(' ');
-  if(/^(?:channels|ערוצים)$/i.test(norm(meta))||/(?:channels|newsletter)/i.test(attr(el,'data-icon'))){
-   const button=el.closest('button,[role="button"],[role="tab"]')||el;
-   if(shown(button))out.push(button);
+ // Exact WhatsApp Channels control only. Never infer by position or scan
+ // generic nav buttons — those guesses previously opened the Archive.
+ const selectors=[
+  '[aria-label="Channels"]','[title="Channels"]',
+  '[aria-label="ערוצים"]','[title="ערוצים"]',
+  '[data-testid*="newsletter" i][role="button"]',
+  'button[data-testid*="newsletter" i]',
+  '[data-icon*="newsletter" i]'
+ ];
+ const buttons=[];
+ for(const sel of selectors){
+  for(const raw of document.querySelectorAll(sel)){
+   if(!shown(raw)||raw.closest('#main'))continue;
+   const r=raw.getBoundingClientRect();
+   if(r.top<18||r.top>Math.min(window.innerHeight*.55,430)||
+      !(r.left<145||r.right>window.innerWidth-145))continue;
+   const b=raw.closest('button,[role="button"],[role="tab"]')||raw;
+   if(shown(b)&&!buttons.includes(b))buttons.push(b);
   }
  }
- return [...new Set(out)];
-}
-async function channelNavigationTooltipButton(){
- // The attached Zmanim extension uses icon hover tooltips when WhatsApp
- // changes the sidebar icon labels.
- const controls=[...document.querySelectorAll('button,[role="button"],[role="tab"]')].filter(shown)
-  .filter(el=>!el.closest('#main')).filter(el=>{
-   const r=el.getBoundingClientRect();
-   return (r.left<125||r.right>window.innerWidth-125)&&
-    r.width>=20&&r.width<=125&&r.height>=20&&r.height<=125&&
-    r.top>18&&r.top<Math.min(window.innerHeight*.55,430);
-  }).sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top);
- for(const el of controls){
-  const r=el.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;
-  const evt={bubbles:true,cancelable:true,clientX:x,clientY:y,view:window};
-  el.dispatchEvent(new MouseEvent('mouseover',evt));
-  el.dispatchEvent(new MouseEvent('mousemove',evt));
-  for(let i=0;i<4;i++){
-   await wait(80);
-   const tip=[...document.querySelectorAll('[role="tooltip"],[data-testid*="tooltip"],div,span')]
-    .filter(shown).find(e=>{
-     if(!/^(?:channels|ערוצים)$/i.test(norm(e.textContent)))return false;
-     const b=e.getBoundingClientRect();
-     return b.width>=15&&b.width<=250&&b.height<100&&Math.abs((b.top+b.bottom)/2-y)<135;
-    });
-   if(tip)return el;
-  }
- }
- return null;
+ return buttons.length===1?buttons[0]:null;
 }
 async function openChannelsHub(){
  if(channelsHubEvidence())return true;
- for(let turn=0;turn<18;turn++){
+ // The Zmanim extension's strong safety rule: click ONLY an explicitly
+ // labelled Channels control. No icon-order guessing; no Archive.
+ const button=channelNavButton();
+ if(!button)throw Error('לא זוהה כפתור ערוצים מפורש; לא ניסיתי לפתוח ארכיון או מסך אחר');
+ humanClick(button);
+ for(let i=0;i<35;i++){
+  await wait(170);
   if(channelsHubEvidence())return true;
-  const options=channelNavButton();
-  const btn=options.length===1?options[0]:options.length===0?await channelNavigationTooltipButton():null;
-  if(btn){
-   humanClick(btn);
-   for(let i=0;i<15;i++){await wait(150);if(channelsHubEvidence())return true;}
-  }
-  await wait(260);
+  const headings=[...document.querySelectorAll('h1,h2,h3,[role="heading"]')].filter(shown)
+   .filter(e=>!e.closest('#main')).map(e=>norm(e.textContent));
+  if(headings.some(t=>/^(?:ארכיון|archive|archived)$/i.test(t)))
+   throw Error('נפתח מסך ארכיון במקום ערוצים; הפסקתי ניווט ללא פעולות נוספות');
  }
- return channelsHubEvidence();
+ throw Error('לחיצה על ערוצים לא פתחה את רשימת הערוצים — בוטל ללא ניווט נוסף');
 }
 function channelOwnedZone(){
  const side=document.querySelector('#side')||document.querySelector('#pane-side');
@@ -1256,15 +1238,15 @@ async function forwardLastChannelUpdateToTest(source,target){
  return {ok:true,detail:'בוצע ניסיון העברת העדכון האחרון מהערוץ לקבוצת הבדיקות'};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V058'){reply({ok:true,version:'0.5.8',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(!['SEND_TEST_V058','FORWARD_TEST_V058','SEND_FORWARD_TEST_V058','CHANNEL_FORWARD_TEST_V058'].includes(msg?.type))return;
+ if(msg?.type==='WA_TEST_PING_V059'){reply({ok:true,version:'0.5.9',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(!['SEND_TEST_V059','FORWARD_TEST_V059','SEND_FORWARD_TEST_V059','CHANNEL_FORWARD_TEST_V059'].includes(msg?.type))return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='CHANNEL_FORWARD_TEST_V058'
+ const promise=msg.type==='CHANNEL_FORWARD_TEST_V059'
   ?forwardLastChannelUpdateToTest(msg.source,msg.target)
-  :msg.type==='SEND_FORWARD_TEST_V058'
+  :msg.type==='SEND_FORWARD_TEST_V059'
    ?sendThenForwardTest(msg.text,msg.attachment,msg.group,msg.target)
-  :msg.type==='FORWARD_TEST_V058'
+  :msg.type==='FORWARD_TEST_V059'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
