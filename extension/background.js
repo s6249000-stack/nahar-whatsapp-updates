@@ -7,6 +7,10 @@ let nearTermTimer=null;
 function classify(phase,detail){
  const d=String(detail||'');
  if(phase==='attempted'||phase==='scheduled'||phase==='processing')return {stage:phase==='scheduled'?'schedule':phase==='processing'?'alarm':'send',code:'OK'};
+ if(/CHANNEL_HUB/.test(d))return {stage:'channel_navigation',code:'HUB_NOT_OPEN'};
+ if(/CHANNEL_ROW/.test(d))return {stage:'channel_selection',code:'CHANNEL_NOT_FOUND'};
+ if(/CHANNEL_ARROW/.test(d))return {stage:'channel_post',code:'FORWARD_CONTROL_MISSING'};
+ if(/CHANNEL_PICKER/.test(d))return {stage:'channel_forward',code:'RECIPIENT_PICKER_MISSING'};
  if(/לשונית WhatsApp|לא נמצאה לשונית/.test(d))return {stage:'tab',code:'NO_TAB'};
  if(/רכיב WhatsApp|חיבור התוסף|לא החזיר תשובה|לא נטען לאחר/.test(d))return {stage:'probe',code:'NO_BRIDGE'};
  if(/אזור שיחה חסר/.test(d))return {stage:'chat',code:'NO_MAIN'};
@@ -51,10 +55,10 @@ async function probeWhatsappTab(tab){
  for(let i=0;i<24;i++){
   try{
    let pong;
-   try{pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V065'});}
+   try{pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V066'});}
    catch(e){
     await chrome.scripting.executeScript({target:{tabId:tab.id},files:['whatsapp.js']});
-    pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V065'});
+    pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V066'});
    }
    if(pong?.ok&&(pong.hasSide||pong.hasMain))return pong;
    lastError='WhatsApp Web עדיין טוען את רשימת השיחות';
@@ -328,7 +332,7 @@ async function sendDueJob(expectedId){
   await probeWhatsappTab(tab);
   // Exactly one send attempt; errors are not automatically retried to avoid duplicate WhatsApp messages.
   let result;
-  try{result=await chrome.tabs.sendMessage(tab.id,job.kind==='channel_forward'?{type:'CHANNEL_FORWARD_TEST_V065',source:job.source,target:job.target,id:job.id}:job.kind==='forward'?{type:'FORWARD_TEST_V065',source:job.source,target:job.target,id:job.id}:job.kind==='send_forward'?{type:'SEND_FORWARD_TEST_V065',group:job.group,target:job.target,text:job.text,attachment:job.attachment,id:job.id}:{type:'SEND_TEST_V065',group:job.group,text:job.text,attachment:job.attachment,id:job.id});}
+  try{result=await chrome.tabs.sendMessage(tab.id,job.kind==='channel_forward'?{type:'CHANNEL_FORWARD_TEST_V066',source:job.source,target:job.target,id:job.id}:job.kind==='forward'?{type:'FORWARD_TEST_V066',source:job.source,target:job.target,id:job.id}:job.kind==='send_forward'?{type:'SEND_FORWARD_TEST_V066',group:job.group,target:job.target,text:job.text,attachment:job.attachment,id:job.id}:{type:'SEND_TEST_V066',group:job.group,text:job.text,attachment:job.attachment,id:job.id});}
   catch(error){throw Error('חיבור התוסף ללשונית אבד בזמן השליחה: '+String(error?.message||error).slice(0,180));}
   if(!result)throw Error('WhatsApp Web לא החזיר תשובה מניסיון השליחה');
   if(!result.ok){const err=new Error(result.error||'השליחה לא אושרה');err.metrics=result.metrics;throw err;}
