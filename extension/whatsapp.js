@@ -976,12 +976,51 @@ async function channelNavigationTooltipButton(){
  }
  return null;
 }
+async function channelsAfterStatusButton(){
+ // Working Zmanim extension fallback: the Channels rail icon is immediately
+ // below Status. Restrict this fallback to the top navigation cluster.
+ const controls=[...document.querySelectorAll('button,[role="button"],[role="tab"]')]
+  .filter(shown).filter(e=>!e.closest('#main')).filter(e=>{
+   const r=e.getBoundingClientRect();
+   return (r.left<125||r.right>window.innerWidth-125)&&r.width>=20&&r.width<=125&&
+    r.height>=20&&r.height<=125&&r.top>18&&r.top<Math.min(window.innerHeight*.55,430);
+  }).sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top);
+ let status=null;
+ for(const el of controls){
+  const r=el.getBoundingClientRect();
+  const meta=[attr(el,'aria-label'),attr(el,'title'),attr(el,'data-icon')].join(' ');
+  if(/^(?:status|updates|סטטוס|עדכונים)$/i.test(norm(meta))){status=el;break;}
+  const event={bubbles:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2,view:window};
+  el.dispatchEvent(new MouseEvent('mouseover',event));
+  for(let n=0;n<3;n++){
+   await wait(85);
+   const tooltip=[...document.querySelectorAll('[role="tooltip"],[data-testid*="tooltip"],span,div')]
+    .filter(shown).find(e=>{
+     const t=e.innerText||e.textContent||'';
+     const q=e.getBoundingClientRect();
+     return /^(?:status|updates|סטטוס|עדכונים)$/i.test(norm(t))&&
+      q.width>15&&q.width<250&&q.height<100&&
+      Math.abs((q.top+q.bottom)/2-(r.top+r.bottom)/2)<95;
+    });
+   if(tooltip){status=el;break;}
+  }
+  if(status)break;
+ }
+ if(!status)return null;
+ const r=status.getBoundingClientRect();
+ const following=controls.filter(e=>{
+  const q=e.getBoundingClientRect();
+  return q.top>r.top+8&&q.top<r.top+105&&
+   Math.abs((q.left+q.right)/2-(r.left+r.right)/2)<35;
+ });
+ return following[0]||null;
+}
 async function openChannelsHub(){
  if(channelsHubEvidence())return true;
  for(let turn=0;turn<18;turn++){
   if(channelsHubEvidence())return true;
   const options=channelNavButton();
-  const btn=options.length===1?options[0]:options.length===0?await channelNavigationTooltipButton():null;
+  const btn=options.length===1?options[0]:options.length===0?(await channelNavigationTooltipButton()||await channelsAfterStatusButton()):null;
   if(btn){
    humanClick(btn);
    for(let i=0;i<15;i++){await wait(150);if(channelsHubEvidence())return true;}
