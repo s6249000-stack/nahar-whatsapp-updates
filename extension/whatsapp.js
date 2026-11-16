@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV061)return;
-globalThis.__naharSchedulerAgentV061=true;
+if(globalThis.__naharSchedulerAgentV062)return;
+globalThis.__naharSchedulerAgentV062=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -983,7 +983,14 @@ async function openChannelsHub(){
  // Ignore the Archive sidebar; it does not block navigation via the rail.
  const button=await channelNavButton();
  if(!button)throw Error('לא זוהה סמל "ערוצים" בסרגל הימני — לא נלחץ ארכיון');
- humanClick(button);
+ // Match the user's working Zmanim extension: a SINGLE native click.
+ // humanClick() dispatches pointerdown/mousedown/up plus click, which can
+ // activate multiple WhatsApp handlers and inadvertently navigate elsewhere.
+ const r=button.getBoundingClientRect();
+ const hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
+ if(!hit||(hit!==button&&!button.contains(hit)))
+  throw Error('סמל הערוצים מוסתר ברגע הלחיצה — לא נלחץ רכיב אחר');
+ button.click();
  for(let i=0;i<36;i++){
   await wait(130);
   if(channelsHubEvidence()||activeTestChannel())return true;
@@ -1258,15 +1265,15 @@ async function forwardLastChannelUpdateToTest(source,target){
  return {ok:true,detail:'בוצע ניסיון העברת העדכון האחרון מהערוץ לקבוצת הבדיקות'};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V061'){reply({ok:true,version:'0.6.1',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(!['SEND_TEST_V061','FORWARD_TEST_V061','SEND_FORWARD_TEST_V061','CHANNEL_FORWARD_TEST_V061'].includes(msg?.type))return;
+ if(msg?.type==='WA_TEST_PING_V062'){reply({ok:true,version:'0.6.2',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(!['SEND_TEST_V062','FORWARD_TEST_V062','SEND_FORWARD_TEST_V062','CHANNEL_FORWARD_TEST_V062'].includes(msg?.type))return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='CHANNEL_FORWARD_TEST_V061'
+ const promise=msg.type==='CHANNEL_FORWARD_TEST_V062'
   ?forwardLastChannelUpdateToTest(msg.source,msg.target)
-  :msg.type==='SEND_FORWARD_TEST_V061'
+  :msg.type==='SEND_FORWARD_TEST_V062'
    ?sendThenForwardTest(msg.text,msg.attachment,msg.group,msg.target)
-  :msg.type==='FORWARD_TEST_V061'
+  :msg.type==='FORWARD_TEST_V062'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
