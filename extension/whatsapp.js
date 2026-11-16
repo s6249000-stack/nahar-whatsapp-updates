@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV055)return;
-globalThis.__naharSchedulerAgentV055=true;
+if(globalThis.__naharSchedulerAgentV056)return;
+globalThis.__naharSchedulerAgentV056=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -887,26 +887,188 @@ async function sendThenForwardTest(text,attachment,group,target){
 
 // Experimental channel -> test-group transfer. Kept isolated from the
 // 0.5.4 tested group send/forward workflows.
-const CHANNEL_TITLE_PREFIX='ידידי ישיבת המקובלים';
+// Adapted from the user's proven Zmanim extension: enter the Channels hub,
+// choose the personally owned main channel from the fixed channels list,
+// then verify the title and channel-only UI. Never search ordinary chats.
+const CHANNEL_TITLE_PREFIX='ידידי ישיבת המקובלים נהר שלום המקובל הרב  בניהו שמואלי שליט"א';
+const CHANNEL_STABLE_PREFIX='ידידי ישיבת המקובלים נהר שלום המקובל הרב';
+function channelHeaderName(){
+ const header=document.querySelector('#main header');
+ if(!header||!shown(header))return '';
+ for(const selector of ['span[title]','[data-testid="conversation-info-header-chat-title"]','span[dir="auto"]','h1','h2']){
+  for(const el of header.querySelectorAll(selector)){
+   if(!shown(el))continue;
+   const t=norm(attr(el,'title')||el.textContent);
+   if(t&&t.length<=180&&!/^(?:search|חיפוש|ערוצים|channels|back|חזרה|more|עוד)$/i.test(t))
+    return t;
+  }
+ }
+ return '';
+}
+function channelViewEvidence(){
+ const main=document.querySelector('#main');
+ if(!main)return false;
+ const header=main.querySelector('header');
+ if(/עוקבים|עוקב|followers?/i.test(header?.innerText||''))return true;
+ if(main.querySelector('[data-testid*="newsletter" i],[data-testid*="channel" i],[data-icon*="newsletter" i]'))return true;
+ return [...main.querySelectorAll('header [aria-label],header [title],header [data-testid],header [data-icon]')]
+  .some(e=>/channel|newsletter|ערוץ/i.test([attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),attr(e,'data-icon')].join(' ')));
+}
 function activeTestChannel(){
- const expected=lexical(CHANNEL_TITLE_PREFIX);
- const headers=[...document.querySelectorAll('#main header,[role="main"] header,header')]
-  .filter(shown).filter(h=>{
-   const box=h.getBoundingClientRect();
-   return box.width>260&&box.left>window.innerWidth*.20&&box.top<240;
-  }).filter(h=>{
-   const names=[...h.querySelectorAll('[title],[aria-label],[dir="auto"]')]
-    .filter(shown).map(e=>lexical(attr(e,'title')||attr(e,'aria-label')||(e.children.length?'':e.textContent)));
-   return names.some(v=>v.includes(expected));
-  });
- if(headers.length!==1)return null;
- const header=headers[0];
- // The header must belong to the opened main content, not a channel search
- // result or sidebar. The name is intentionally partial; the exact channel
- // heading must be visibly present and unmistakably contain the brand.
- const root=header.closest('#main,[role="main"]')||null;
- if(!root||!shown(root))return null;
- return {root,header};
+ const main=document.querySelector('#main'),header=main?.querySelector('header');
+ if(!header||!shown(header)||!channelViewEvidence())return null;
+ const candidates=[...header.querySelectorAll('span[title],[data-testid="conversation-info-header-chat-title"],span[dir="auto"],h1,h2')]
+  .filter(shown).map(e=>norm(attr(e,'title')||e.textContent));
+ const prefix=lexical(CHANNEL_STABLE_PREFIX);
+ const verified=candidates.some(t=>lexical(t)===lexical(CHANNEL_TITLE_PREFIX)||
+  lexical(t).startsWith(prefix+' '));
+ if(!verified)return null;
+ return {root:main,header};
+}
+function channelsHubEvidence(){
+ const headings=[...document.querySelectorAll('h1,h2,h3,[role="heading"]')]
+  .filter(shown).filter(e=>!e.closest('#main'));
+ if(!headings.some(e=>/^(?:ערוצים|channels)$/i.test(norm(e.textContent))))return false;
+ if(headings.some(e=>/^(?:ארכיון|archive|archived)$/i.test(norm(e.textContent))))return false;
+ return true;
+}
+function channelNavButton(){
+ const nodes=[...document.querySelectorAll('button,[role="button"],[role="tab"],[aria-label],[title],[data-icon]')]
+  .filter(shown).filter(e=>!e.closest('#main'));
+ const out=[];
+ for(const el of nodes){
+  const r=el.getBoundingClientRect();
+  if(r.width<16||r.height<16||r.top<15||r.top>Math.min(window.innerHeight*.55,430))continue;
+  if(!(r.left<145||r.right>window.innerWidth-145))continue;
+  const meta=[attr(el,'aria-label'),attr(el,'title'),attr(el,'data-testid'),attr(el,'data-icon')].join(' ');
+  if(/^(?:channels|ערוצים)$/i.test(norm(meta))||/(?:channels|newsletter)/i.test(attr(el,'data-icon'))){
+   const button=el.closest('button,[role="button"],[role="tab"]')||el;
+   if(shown(button))out.push(button);
+  }
+ }
+ return [...new Set(out)];
+}
+async function channelNavigationTooltipButton(){
+ // The attached Zmanim extension uses icon hover tooltips when WhatsApp
+ // changes the sidebar icon labels.
+ const controls=[...document.querySelectorAll('button,[role="button"],[role="tab"]')].filter(shown)
+  .filter(el=>!el.closest('#main')).filter(el=>{
+   const r=el.getBoundingClientRect();
+   return (r.left<125||r.right>window.innerWidth-125)&&
+    r.width>=20&&r.width<=125&&r.height>=20&&r.height<=125&&
+    r.top>18&&r.top<Math.min(window.innerHeight*.55,430);
+  }).sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top);
+ for(const el of controls){
+  const r=el.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;
+  const evt={bubbles:true,cancelable:true,clientX:x,clientY:y,view:window};
+  el.dispatchEvent(new MouseEvent('mouseover',evt));
+  el.dispatchEvent(new MouseEvent('mousemove',evt));
+  for(let i=0;i<4;i++){
+   await wait(80);
+   const tip=[...document.querySelectorAll('[role="tooltip"],[data-testid*="tooltip"],div,span')]
+    .filter(shown).find(e=>{
+     if(!/^(?:channels|ערוצים)$/i.test(norm(e.textContent)))return false;
+     const b=e.getBoundingClientRect();
+     return b.width>=15&&b.width<=250&&b.height<100&&Math.abs((b.top+b.bottom)/2-y)<135;
+    });
+   if(tip)return el;
+  }
+ }
+ return null;
+}
+async function openChannelsHub(){
+ if(channelsHubEvidence())return true;
+ for(let turn=0;turn<18;turn++){
+  if(channelsHubEvidence())return true;
+  const options=channelNavButton();
+  const btn=options.length===1?options[0]:options.length===0?await channelNavigationTooltipButton():null;
+  if(btn){
+   humanClick(btn);
+   for(let i=0;i<15;i++){await wait(150);if(channelsHubEvidence())return true;}
+  }
+  await wait(260);
+ }
+ return channelsHubEvidence();
+}
+function channelOwnedZone(){
+ const side=document.querySelector('#side')||document.querySelector('#pane-side');
+ if(!side||!channelsHubEvidence())return null;
+ const search=[...side.querySelectorAll('input[type="text"],[role="searchbox"],[role="textbox"],[contenteditable="true"]')]
+  .filter(shown).find(e=>/search|חיפוש/i.test([attr(e,'placeholder'),attr(e,'aria-label'),attr(e,'aria-placeholder')].join(' ')));
+ if(!search)return null;
+ const r=search.getBoundingClientRect(),sideRect=side.getBoundingClientRect();
+ const headings=[...side.querySelectorAll('h1,h2,h3,[role="heading"],div,span')].filter(shown)
+  .filter(e=>/^(?:חיפוש ערוצים למעקב|find channels to follow|channels to follow)$/i.test(norm(e.textContent)));
+ const follow=headings.filter(e=>e.getBoundingClientRect().top>r.bottom)
+  .sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top)[0];
+ return {left:Math.max(sideRect.left,r.left-80),right:Math.min(sideRect.right,r.right+80),
+  top:r.bottom+4,bottom:Math.min(sideRect.bottom,follow?follow.getBoundingClientRect().top-8:r.bottom+280)};
+}
+function channelOwnedRows(){
+ const zone=channelOwnedZone();
+ if(!zone||zone.bottom<=zone.top+40)return [];
+ const side=document.querySelector('#side')||document.querySelector('#pane-side');
+ const matches=[];
+ for(const e of side.querySelectorAll('[role="row"],[role="listitem"],[tabindex="0"],[tabindex="-1"],div,li,a')){
+  if(!shown(e)||e.closest('#main'))continue;
+  const r=e.getBoundingClientRect(),cy=(r.top+r.bottom)/2;
+  if(cy<zone.top||cy>zone.bottom||r.width<235||r.height<42||r.height>135)continue;
+  if(r.right<zone.left||r.left>zone.right)continue;
+  const name=norm(e.innerText||e.textContent);
+  if(/^(?:channels|ערוצים|search|חיפוש)$|חיפוש ערוצים למעקב|find channels to follow|יצירת ערוץ|create channel/i.test(name))continue;
+  if(!e.querySelector('img,[role="img"],svg')&&!/\b\d{1,2}:\d{2}\b/.test(name))continue;
+  matches.push({el:e,top:r.top,height:r.height,name});
+ }
+ matches.sort((x,y)=>x.top-y.top||x.height-y.height);
+ const rows=[];
+ for(const item of matches){
+  const at=rows.findIndex(x=>Math.abs(x.top-item.top)<12);
+  if(at<0)rows.push(item);
+  else if(item.height<rows[at].height)rows[at]=item;
+ }
+ return rows;
+}
+function findMainChannelRow(){
+ const zone=channelOwnedZone();
+ if(!zone)return null;
+ const side=document.querySelector('#side')||document.querySelector('#pane-side');
+ const stable=lexical(CHANNEL_STABLE_PREFIX);
+ const leaves=[...side.querySelectorAll('span,[dir="auto"],[title],[aria-label],div')]
+  .filter(shown).filter(e=>{
+   const r=e.getBoundingClientRect(),cy=(r.top+r.bottom)/2;
+   return cy>=zone.top&&cy<=zone.bottom&&r.left<zone.right&&r.right>zone.left&&
+    lexical(attr(e,'title')||attr(e,'aria-label')||(e.children.length?'':e.textContent)).startsWith(stable);
+  }).sort((a,b)=>a.children.length-b.children.length);
+ for(const leaf of leaves){
+  let node=leaf;
+  for(let i=0;i<8&&node&&node!==side;i++,node=node.parentElement){
+   const r=node.getBoundingClientRect();
+   if(r.width>=235&&r.height>=42&&r.height<=135)return node;
+  }
+ }
+ // Source extension's guarded fallback: main channel is SECOND within the
+ // owned channels between search and "channels to follow". Never sidebar global.
+ const rows=channelOwnedRows();
+ return rows.length>=2?rows[1].el:null;
+}
+async function openMainChannel(){
+ if(activeTestChannel())return true;
+ if(!await openChannelsHub())throw Error('לא נפתחה לשונית ערוצים ב־WhatsApp Web');
+ for(let turn=0;turn<10;turn++){
+  const row=findMainChannelRow();
+  if(row){
+   const r=row.getBoundingClientRect(),x=r.left+r.width*.55,y=r.top+r.height/2;
+   const hit=document.elementFromPoint(x,y);
+   if(hit&&row.contains(hit))humanClick(hit);
+   else humanClick(row);
+   for(let i=0;i<25;i++){
+    await wait(150);
+    if(activeTestChannel())return true;
+   }
+  }
+  await wait(320);
+ }
+ throw Error('רשימת הערוצים נפתחה, אך הערוץ הראשי לא זוהה. לא בוצעה העברה');
 }
 function channelForwardCandidates(view){
  const area=view.root,heading=view.header.getBoundingClientRect();
@@ -930,8 +1092,9 @@ function channelForwardCandidates(view){
 async function forwardLastChannelUpdateToTest(source,target){
  if(source!==CHANNEL_TITLE_PREFIX||target!==FORWARD_TEST_GROUP)
   throw Error('ניסוי ערוץ מורשה רק מהערוץ המוגדר אל קבוצת הבדיקות');
+ await openMainChannel();
  const channel=activeTestChannel();
- if(!channel)throw Error('ערוץ המקור לא פתוח ב־WhatsApp Web. פתח את הערוץ "ידידי ישיבת המקובלים" לפני הניסוי');
+ if(!channel)throw Error('הערוץ הראשי לא אומת לאחר פתיחה אוטומטית — לא בוצעה העברה');
  // Only inspect the feed. No send is permitted until the exact group has
  // been visibly selected in WhatsApp's native forwarding dialog.
  const scrollable=[...channel.root.querySelectorAll('*')].filter(shown).filter(e=>{
@@ -991,15 +1154,15 @@ async function forwardLastChannelUpdateToTest(source,target){
  return {ok:true,detail:'בוצע ניסיון העברת העדכון האחרון מהערוץ לקבוצת הבדיקות'};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V055'){reply({ok:true,version:'0.5.5',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(!['SEND_TEST_V055','FORWARD_TEST_V055','SEND_FORWARD_TEST_V055','CHANNEL_FORWARD_TEST_V055'].includes(msg?.type))return;
+ if(msg?.type==='WA_TEST_PING_V056'){reply({ok:true,version:'0.5.6',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(!['SEND_TEST_V056','FORWARD_TEST_V056','SEND_FORWARD_TEST_V056','CHANNEL_FORWARD_TEST_V056'].includes(msg?.type))return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='CHANNEL_FORWARD_TEST_V055'
+ const promise=msg.type==='CHANNEL_FORWARD_TEST_V056'
   ?forwardLastChannelUpdateToTest(msg.source,msg.target)
-  :msg.type==='SEND_FORWARD_TEST_V055'
+  :msg.type==='SEND_FORWARD_TEST_V056'
    ?sendThenForwardTest(msg.text,msg.attachment,msg.group,msg.target)
-  :msg.type==='FORWARD_TEST_V055'
+  :msg.type==='FORWARD_TEST_V056'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
