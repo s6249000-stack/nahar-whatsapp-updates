@@ -1293,7 +1293,12 @@ async function forwardLastChannelUpdateToTest(source,target){
  humanClick(confirm);
  await wait(1150);
  if(forwardingDialog())throw Error('חלון ההעברה נשאר פתוח — אין אישור שהניסיון הושלם');
- return {ok:true,detail:'בוצע ניסיון העברת העדכון האחרון מהערוץ לקבוצת הבדיקות'};
+ // Clean up only the unwanted Archive sidebar after successful forwarding.
+ // Do not resend, repeat confirmation, or change the selected destination.
+ const sidebarFixed=await restoreChannelsSidebar();
+ return {ok:true,detail:sidebarFixed?
+  'בוצע ניסיון העברת העדכון האחרון מהערוץ לקבוצת הבדיקות':
+  'בוצעה העברה מהערוץ לקבוצת הבדיקות, אך לא הצלחתי לסגור את פאנל הארכיון'};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
  if(msg?.type==='WA_TEST_PING_V063'){reply({ok:true,version:'0.6.3',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
