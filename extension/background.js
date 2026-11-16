@@ -51,10 +51,10 @@ async function probeWhatsappTab(tab){
  for(let i=0;i<24;i++){
   try{
    let pong;
-   try{pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V054'});}
+   try{pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V055'});}
    catch(e){
     await chrome.scripting.executeScript({target:{tabId:tab.id},files:['whatsapp.js']});
-    pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V054'});
+    pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V055'});
    }
    if(pong?.ok&&(pong.hasSide||pong.hasMain))return pong;
    lastError='WhatsApp Web עדיין טוען את רשימת השיחות';
@@ -195,7 +195,7 @@ chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse)=>{
- if(!['SCHEDULE_TEST','FORWARD_TEST','SEND_FORWARD_TEST','STATUS_TEST'].includes(msg?.type)) return;
+ if(!['SCHEDULE_TEST','FORWARD_TEST','SEND_FORWARD_TEST','CHANNEL_FORWARD_TEST','STATUS_TEST'].includes(msg?.type)) return;
  if(msg.type==='STATUS_TEST'){
   (async()=>{
    if(!sender.url?.startsWith('https://nahar-shalom-tools.pages.dev/tools/whatsapp-scheduler/')) throw Error('מקור הבקשה אינו מורשה');
@@ -207,6 +207,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse)=>{
  (async()=>{
   if(!sender.url?.startsWith('https://nahar-shalom-tools.pages.dev/tools/whatsapp-scheduler/')) throw Error('מקור הבקשה אינו מורשה');
   const job=msg.job||{};
+  if(msg.type==='CHANNEL_FORWARD_TEST'){
+   const source='ידידי ישיבת המקובלים',target='🏷️ פנימי שמעון נוה 🔖';
+   if(job.source!==source||job.target!==target)throw Error('ניסוי הערוץ מורשה רק אל קבוצת הבדיקות');
+   const old=await chrome.storage.local.get([JOB,GROUP_LOCK]);
+   if(['processing','scheduled'].includes(old[JOB]?.phase))throw Error('יש ניסיון פעיל אחר');
+   if(old[GROUP_LOCK]&&old[GROUP_LOCK]!==target)throw Error('נעילת קבוצת הבדיקות אינה תואמת');
+   if(!Number.isFinite(job.when)||job.when<Date.now()-15000||job.when>Date.now()+60000)throw Error('מועד ניסיון הערוץ אינו תקין');
+   const item={id:crypto.randomUUID(),attemptId:/^[a-zA-Z0-9-]{8,40}$/.test(job.attemptId||'')?job.attemptId:crypto.randomUUID(),
+    kind:'channel_forward',source,target,when:Math.max(job.when,Date.now()+250),phase:'scheduled'};
+   await chrome.storage.local.set({[GROUP_LOCK]:target,[JOB]:item});
+   await setAlarm(item);await status('scheduled','ניסוי העברת העדכון האחרון מהערוץ לקבוצת הבדיקות');
+   scheduleNearTerm(item);
+   await activateWhatsappTab();
+   return {ok:true,id:item.id};
+  }
   if(msg.type==='FORWARD_TEST'){
    const only='🏷️ פנימי שמעון נוה 🔖';
    if(job.source!==only||job.target!==only)throw Error('ניסוי ההעברה מוגבל לאותה קבוצת בדיקות כמקור וכיעד');
@@ -270,16 +285,16 @@ async function sendDueJob(expectedId){
  try {
   const r=await chrome.storage.local.get(JOB),job=r[JOB];if(!job||job.phase!=='scheduled'||(expectedId&&job.id!==expectedId))return;
   if(Date.now()+1000<job.when){await setAlarm(job);return;}
-  job.phase='processing';await chrome.storage.local.set({[JOB]:job});await status('processing',job.kind==='forward'?'מבצע העברת הודעה אחרונה לקבוצת הבדיקות':job.kind==='send_forward'?'שולח הודעה ולאחר מכן מעביר אותה בקבוצת הבדיקות':'מנסה לפרסם בקבוצת הבדיקות');
+  job.phase='processing';await chrome.storage.local.set({[JOB]:job});await status('processing',job.kind==='channel_forward'?'מנסה להעביר עדכון אחרון מהערוץ לקבוצת הבדיקות':job.kind==='forward'?'מבצע העברת הודעה אחרונה לקבוצת הבדיקות':job.kind==='send_forward'?'שולח הודעה ולאחר מכן מעביר אותה בקבוצת הבדיקות':'מנסה לפרסם בקבוצת הבדיקות');
   const tab=await activateWhatsappTab();
   await probeWhatsappTab(tab);
   // Exactly one send attempt; errors are not automatically retried to avoid duplicate WhatsApp messages.
   let result;
-  try{result=await chrome.tabs.sendMessage(tab.id,job.kind==='forward'?{type:'FORWARD_TEST_V054',source:job.source,target:job.target,id:job.id}:job.kind==='send_forward'?{type:'SEND_FORWARD_TEST_V054',group:job.group,target:job.target,text:job.text,attachment:job.attachment,id:job.id}:{type:'SEND_TEST_V054',group:job.group,text:job.text,attachment:job.attachment,id:job.id});}
+  try{result=await chrome.tabs.sendMessage(tab.id,job.kind==='channel_forward'?{type:'CHANNEL_FORWARD_TEST_V055',source:job.source,target:job.target,id:job.id}:job.kind==='forward'?{type:'FORWARD_TEST_V055',source:job.source,target:job.target,id:job.id}:job.kind==='send_forward'?{type:'SEND_FORWARD_TEST_V055',group:job.group,target:job.target,text:job.text,attachment:job.attachment,id:job.id}:{type:'SEND_TEST_V055',group:job.group,text:job.text,attachment:job.attachment,id:job.id});}
   catch(error){throw Error('חיבור התוסף ללשונית אבד בזמן השליחה: '+String(error?.message||error).slice(0,180));}
   if(!result)throw Error('WhatsApp Web לא החזיר תשובה מניסיון השליחה');
   if(!result.ok){const err=new Error(result.error||'השליחה לא אושרה');err.metrics=result.metrics;throw err;}
-  job.phase='attempted';const used=job.attachment?.id;job.attachment=null;await chrome.storage.local.set({[JOB]:job});if(used)cleanUpload(used).catch(()=>{});await status('attempted',job.kind==='forward'?'בוצע ניסיון העברה — יש לבדוק הופעת הודעה מועברת חדשה בקבוצת הבדיקות':job.kind==='send_forward'?'בוצעו שליחה והעברה — בדוק ששתי ההודעות מופיעות בקבוצה':'ניסיון שליחה בוצע; יש לבדוק בקבוצה שההודעה נראית');
+  job.phase='attempted';const used=job.attachment?.id;job.attachment=null;await chrome.storage.local.set({[JOB]:job});if(used)cleanUpload(used).catch(()=>{});await status('attempted',job.kind==='channel_forward'?'בוצע ניסיון העברה מהערוץ — יש לאמת שהעדכון האחרון הופיע בקבוצת הבדיקות':job.kind==='forward'?'בוצע ניסיון העברה — יש לבדוק הופעת הודעה מועברת חדשה בקבוצת הבדיקות':job.kind==='send_forward'?'בוצעו שליחה והעברה — בדוק ששתי ההודעות מופיעות בקבוצה':'ניסיון שליחה בוצע; יש לבדוק בקבוצה שההודעה נראית');
   /* Delivery status is reported via STATUS_TEST */
  }catch(e){await status('failed',String(e.message||e),e.metrics||{});const r=await chrome.storage.local.get(JOB);if(r[JOB]){r[JOB].phase='failed';const used=r[JOB].attachment?.id;r[JOB].attachment=null;if(used)cleanUpload(used).catch(()=>{});r[JOB].error=String(e.message||e);await chrome.storage.local.set({[JOB]:r[JOB]});}/* Delivery status is reported via STATUS_TEST */}finally{ongoing=false}
 }
