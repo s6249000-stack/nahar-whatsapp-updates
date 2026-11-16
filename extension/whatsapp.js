@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV056)return;
-globalThis.__naharSchedulerAgentV056=true;
+if(globalThis.__naharSchedulerAgentV057)return;
+globalThis.__naharSchedulerAgentV057=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -976,51 +976,12 @@ async function channelNavigationTooltipButton(){
  }
  return null;
 }
-async function channelsAfterStatusButton(){
- // Working Zmanim extension fallback: the Channels rail icon is immediately
- // below Status. Restrict this fallback to the top navigation cluster.
- const controls=[...document.querySelectorAll('button,[role="button"],[role="tab"]')]
-  .filter(shown).filter(e=>!e.closest('#main')).filter(e=>{
-   const r=e.getBoundingClientRect();
-   return (r.left<125||r.right>window.innerWidth-125)&&r.width>=20&&r.width<=125&&
-    r.height>=20&&r.height<=125&&r.top>18&&r.top<Math.min(window.innerHeight*.55,430);
-  }).sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top);
- let status=null;
- for(const el of controls){
-  const r=el.getBoundingClientRect();
-  const meta=[attr(el,'aria-label'),attr(el,'title'),attr(el,'data-icon')].join(' ');
-  if(/^(?:status|updates|סטטוס|עדכונים)$/i.test(norm(meta))){status=el;break;}
-  const event={bubbles:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2,view:window};
-  el.dispatchEvent(new MouseEvent('mouseover',event));
-  for(let n=0;n<3;n++){
-   await wait(85);
-   const tooltip=[...document.querySelectorAll('[role="tooltip"],[data-testid*="tooltip"],span,div')]
-    .filter(shown).find(e=>{
-     const t=e.innerText||e.textContent||'';
-     const q=e.getBoundingClientRect();
-     return /^(?:status|updates|סטטוס|עדכונים)$/i.test(norm(t))&&
-      q.width>15&&q.width<250&&q.height<100&&
-      Math.abs((q.top+q.bottom)/2-(r.top+r.bottom)/2)<95;
-    });
-   if(tooltip){status=el;break;}
-  }
-  if(status)break;
- }
- if(!status)return null;
- const r=status.getBoundingClientRect();
- const following=controls.filter(e=>{
-  const q=e.getBoundingClientRect();
-  return q.top>r.top+8&&q.top<r.top+105&&
-   Math.abs((q.left+q.right)/2-(r.left+r.right)/2)<35;
- });
- return following[0]||null;
-}
 async function openChannelsHub(){
  if(channelsHubEvidence())return true;
  for(let turn=0;turn<18;turn++){
   if(channelsHubEvidence())return true;
   const options=channelNavButton();
-  const btn=options.length===1?options[0]:options.length===0?(await channelNavigationTooltipButton()||await channelsAfterStatusButton()):null;
+  const btn=options.length===1?options[0]:options.length===0?await channelNavigationTooltipButton():null;
   if(btn){
    humanClick(btn);
    for(let i=0;i<15;i++){await wait(150);if(channelsHubEvidence())return true;}
@@ -1110,23 +1071,75 @@ async function openMainChannel(){
  throw Error('רשימת הערוצים נפתחה, אך הערוץ הראשי לא זוהה. לא בוצעה העברה');
 }
 function channelForwardCandidates(view){
- const area=view.root,heading=view.header.getBoundingClientRect();
- const matches=[...area.querySelectorAll('button,[role="button"],[aria-label],[title],[data-testid],[data-icon]')]
-  .filter(forwardVisible).filter(e=>!e.closest('header,footer,[role="dialog"],[role="menu"]'))
-  .filter(e=>{
-   const token=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),attr(e,'data-icon')].join(' ');
-   return /(?:forward|העבר(?:ה)?)/i.test(token)&&!/(?:forwarded count|forward-count|הועבר פעמים)/i.test(token);
-  }).map(e=>e.closest('button,[role="button"]')||e)
-  .filter(e=>{
-   const rect=e.getBoundingClientRect();
-   return rect.width>12&&rect.height>12&&rect.top>heading.bottom+20&&
-    rect.left>view.root.getBoundingClientRect().left+8&&rect.bottom<window.innerHeight;
-  });
- const unique=[...new Set(matches)];
- return unique.filter(e=>!unique.some(x=>x!==e&&e.contains(x))).sort((x,y)=>{
-  const a=x.getBoundingClientRect(),b=y.getBoundingClientRect();
-  return a.top-b.top||a.left-b.left;
- });
+ const root=view.root,feed=root.getBoundingClientRect(),header=view.header.getBoundingClientRect();
+ // Channel updates are rendered as standalone cards. The small double-arrow
+ // control (shown in the user's screenshot) is BELOW the lower-right edge
+ // of a card and is often an unlabeled SVG inside a DIV, not a button.
+ const visible=[...root.querySelectorAll('button,[role="button"],svg,[data-icon],div,span')]
+  .filter(shown).filter(e=>!e.closest('header,footer,[role="dialog"],[role="menu"]'));
+ const controls=[];
+ for(const e of visible){
+  const r=e.getBoundingClientRect();
+  const cx=(r.left+r.right)/2,cy=(r.top+r.bottom)/2;
+  if(cx<feed.left+85||cx>feed.right-15||cy<header.bottom+60||cy>feed.bottom-60)continue;
+  if(r.width<22||r.width>62||r.height<20||r.height>62)continue;
+  const parent=e.closest('button,[role="button"]');
+  const candidate=parent&&shown(parent)?parent:e;
+  const rect=candidate.getBoundingClientRect();
+  if(rect.width>75||rect.height>75||rect.width<18||rect.height<18)continue;
+  const metadata=[attr(candidate,'aria-label'),attr(candidate,'title'),attr(candidate,'data-testid'),
+   attr(candidate,'data-icon'),attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),attr(e,'data-icon')].join(' ');
+  if(/(?:close|delete|reply|react|emoji|share|download|back|menu|עוד|תפריט|מחק|תגובה)/i.test(metadata))continue;
+  const icons=[candidate,...candidate.querySelectorAll('svg,[data-icon]')];
+  const arrowLabel=icons.some(el=>/(?:forward|העבר)/i.test(
+   [attr(el,'data-icon'),attr(el,'aria-label'),attr(el,'title'),attr(el,'data-testid')].join(' ')));
+  const svg=candidate.tagName.toLowerCase()==='svg'||!!candidate.querySelector('svg,path');
+  if(!svg&&!arrowLabel)continue;
+  controls.push({el:candidate,rect,arrowLabel});
+ }
+ const distinct=[...new Map(controls.map(c=>[c.el,c])).values()];
+ // Require the button to be associated with the bottom-most visible actual
+ // message card; unlike the group UI it may carry no data-icon/label.
+ const cards=[...root.querySelectorAll('article,[data-id],[data-testid*="channel-update"],[data-testid*="channel-message"],[data-testid*="message"],.message-in,.message-out')]
+  .filter(shown).filter(e=>!e.closest('header,footer,[role="dialog"]'))
+  .map(e=>({el:e,r:e.getBoundingClientRect()}))
+  .filter(x=>x.r.width>240&&x.r.width<Math.min(800,feed.width*.9)&&
+    x.r.height>70&&x.r.bottom>header.bottom+100&&x.r.bottom<feed.bottom-65);
+ // If WhatsApp doesn't expose card IDs, recover visible card from the
+ // media bubble or the text with a message timestamp/views footer.
+ if(!cards.length){
+  for(const media of root.querySelectorAll('video,video[poster],img,[data-testid*="media"]')){
+   if(!shown(media))continue;
+   for(let node=media,depth=0;node&&node!==root&&depth<10;node=node.parentElement,depth++){
+    const r=node.getBoundingClientRect();
+    if(r.width>260&&r.width<800&&r.height>140&&r.height<feed.height*.85&&
+      r.bottom<feed.bottom-65&&r.bottom>header.bottom+130){
+     cards.push({el:node,r});break;
+    }
+   }
+  }
+ }
+ // For each card, the forward-arrow center must be 0-58px BELOW its bubble,
+ // and within 70px of its right edge. Favor the most recently rendered (lowest).
+ const choices=[];
+ for(const card of cards){
+  for(const c of distinct){
+   const x=(c.rect.left+c.rect.right)/2,y=(c.rect.top+c.rect.bottom)/2;
+   const dy=y-card.r.bottom,dx=card.r.right-x;
+   if(dy>=-2&&dy<62&&dx>=-12&&dx<85&&c.rect.width>=25&&c.rect.width<=64){
+    const point=document.elementFromPoint(x,y);
+    if(!point||!(c.el===point||c.el.contains(point)||point.contains(c.el)))continue;
+    choices.push({card,c,score:card.r.bottom+ (c.arrowLabel?3:0)});
+   }
+  }
+ }
+ choices.sort((x,y)=>y.score-x.score);
+ if(!choices.length)return [];
+ // A single visible arrow associated with the LAST card is mandatory.
+ const top=choices[0];
+ if(choices.some(x=>x!==top&&Math.abs(x.card.r.bottom-top.card.r.bottom)<8&&
+  Math.abs(x.c.rect.left-top.c.rect.left)>12))return [];
+ return [top.c.el];
 }
 async function forwardLastChannelUpdateToTest(source,target){
  if(source!==CHANNEL_TITLE_PREFIX||target!==FORWARD_TEST_GROUP)
@@ -1193,15 +1206,15 @@ async function forwardLastChannelUpdateToTest(source,target){
  return {ok:true,detail:'בוצע ניסיון העברת העדכון האחרון מהערוץ לקבוצת הבדיקות'};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V056'){reply({ok:true,version:'0.5.6',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(!['SEND_TEST_V056','FORWARD_TEST_V056','SEND_FORWARD_TEST_V056','CHANNEL_FORWARD_TEST_V056'].includes(msg?.type))return;
+ if(msg?.type==='WA_TEST_PING_V057'){reply({ok:true,version:'0.5.7',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(!['SEND_TEST_V057','FORWARD_TEST_V057','SEND_FORWARD_TEST_V057','CHANNEL_FORWARD_TEST_V057'].includes(msg?.type))return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='CHANNEL_FORWARD_TEST_V056'
+ const promise=msg.type==='CHANNEL_FORWARD_TEST_V057'
   ?forwardLastChannelUpdateToTest(msg.source,msg.target)
-  :msg.type==='SEND_FORWARD_TEST_V056'
+  :msg.type==='SEND_FORWARD_TEST_V057'
    ?sendThenForwardTest(msg.text,msg.attachment,msg.group,msg.target)
-  :msg.type==='FORWARD_TEST_V056'
+  :msg.type==='FORWARD_TEST_V057'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
