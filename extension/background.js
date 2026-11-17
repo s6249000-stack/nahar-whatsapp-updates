@@ -2,11 +2,13 @@
 const GROUP_LOCK='testGroupLock';
 const JOB='testJob';
 const ALARM='nahar-test-send';
+const WATCHDOG='nahar-processing-watchdog';
 let ongoing=false;
 let nearTermTimer=null;
 function classify(phase,detail){
  const d=String(detail||'');
  if(phase==='attempted'||phase==='scheduled'||phase==='processing')return {stage:phase==='scheduled'?'schedule':phase==='processing'?'alarm':'send',code:'OK'};
+ if(/PROCESS_INTERRUPTED/.test(d))return {stage:'lifecycle',code:'INTERRUPTED'};
  if(/CHANNEL_OPEN/.test(d))return {stage:'channel_navigation',code:'OPEN_FAILED'};
  if(/CHANNEL_HUB/.test(d))return {stage:'channel_navigation',code:'HUB_NOT_OPEN'};
  if(/CHANNEL_ROW/.test(d))return {stage:'channel_selection',code:'CHANNEL_NOT_FOUND'};
@@ -43,6 +45,17 @@ async function status(phase, detail='',metrics={}){
  }catch{}
 }
 async function setAlarm(job) {await chrome.alarms.clear(ALARM);await chrome.alarms.create(ALARM,{when:job.when});}
+async function interruptOrphanedProcessing(force=false){
+ const r=await chrome.storage.local.get(JOB),job=r[JOB];
+ if(!job||job.phase!=='processing'||ongoing)return false;
+ if(!force&&Date.now()-(job.processingStartedAt||job.when||0)<120000)return false;
+ job.phase='failed';job.error='PROCESS_INTERRUPTED: התהליך נקטע לפני אישור סיום; יש לבדוק את קבוצת הבדיקות לפני ניסיון נוסף';
+ await chrome.storage.local.set({[JOB]:job});
+ await chrome.alarms.clear(WATCHDOG);
+ await status('failed',job.error);
+ return true;
+}
+
 async function activateWhatsappTab(){
  const tabs=await chrome.tabs.query({url:'https://web.whatsapp.com/*'});
  if(!tabs.length)throw Error('לא נמצאה לשונית WhatsApp Web. פתח אותה פעם אחת באותו Chrome ונסה שוב');
@@ -56,10 +69,10 @@ async function probeWhatsappTab(tab){
  for(let i=0;i<24;i++){
   try{
    let pong;
-   try{pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V068'});}
+   try{pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V0610'});}
    catch(e){
     await chrome.scripting.executeScript({target:{tabId:tab.id},files:['whatsapp.js']});
-    pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V068'});
+    pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V0610'});
    }
    if(pong?.ok&&(pong.hasSide||pong.hasMain))return pong;
    lastError='WhatsApp Web עדיין טוען את רשימת השיחות';
@@ -309,8 +322,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse)=>{
   return {ok:true,id:item.id};
  })().then(sendResponse).catch(e=>sendResponse({ok:false,error:e.message}));return true;
 });
-chrome.runtime.onInstalled.addListener(async()=>{const r=await chrome.storage.local.get(JOB);if(r[JOB]?.phase==='scheduled')await setAlarm(r[JOB]);});
-chrome.runtime.onStartup.addListener(async()=>{const r=await chrome.storage.local.get(JOB);if(r[JOB]?.phase==='scheduled')await setAlarm(r[JOB]);});
+chrome.runtime.onInstalled.addListener(async()=>{const r=await chrome.storage.local.get(JOB);if(r[JOB]?.phase==='scheduled')await setAlarm(r[JOB]);else await interruptOrphanedProcessing(true);});
+chrome.runtime.onStartup.addListener(async()=>{const r=await chrome.storage.local.get(JOB);if(r[JOB]?.phase==='scheduled')await setAlarm(r[JOB]);else await interruptOrphanedProcessing(true);});
 function scheduleNearTerm(job){
  if(nearTermTimer!==null){clearTimeout(nearTermTimer);nearTermTimer=null;}
  const remaining=job.when-Date.now();
@@ -321,6 +334,10 @@ function scheduleNearTerm(job){
 }
 chrome.alarms.onAlarm.addListener(a=>{
  if(a.name===ALARM)sendDueJob(null).catch(e=>status('failed','שגיאת שעון Chrome: '+String(e?.message||e)));
+ if(a.name===WATCHDOG){
+  if(ongoing)chrome.alarms.create(WATCHDOG,{when:Date.now()+60000}).catch(()=>{});
+  else interruptOrphanedProcessing().catch(()=>{});
+ }
 });
 async function sendDueJob(expectedId){
  if(ongoing)return;
@@ -328,16 +345,16 @@ async function sendDueJob(expectedId){
  try {
   const r=await chrome.storage.local.get(JOB),job=r[JOB];if(!job||job.phase!=='scheduled'||(expectedId&&job.id!==expectedId))return;
   if(Date.now()+1000<job.when){await setAlarm(job);return;}
-  job.phase='processing';await chrome.storage.local.set({[JOB]:job});await status('processing',job.kind==='channel_forward'?'מנסה להעביר עדכון אחרון מהערוץ לקבוצת הבדיקות':job.kind==='forward'?'מבצע העברת הודעה אחרונה לקבוצת הבדיקות':job.kind==='send_forward'?'שולח הודעה ולאחר מכן מעביר אותה בקבוצת הבדיקות':'מנסה לפרסם בקבוצת הבדיקות');
+  job.phase='processing';job.processingStartedAt=Date.now();await chrome.storage.local.set({[JOB]:job});await chrome.alarms.create(WATCHDOG,{when:Date.now()+120000});await status('processing',job.kind==='channel_forward'?'מנסה להעביר עדכון אחרון מהערוץ לקבוצת הבדיקות':job.kind==='forward'?'מבצע העברת הודעה אחרונה לקבוצת הבדיקות':job.kind==='send_forward'?'שולח הודעה ולאחר מכן מעביר אותה בקבוצת הבדיקות':'מנסה לפרסם בקבוצת הבדיקות');
   const tab=await activateWhatsappTab();
   await probeWhatsappTab(tab);
   // Exactly one send attempt; errors are not automatically retried to avoid duplicate WhatsApp messages.
   let result;
-  try{result=await chrome.tabs.sendMessage(tab.id,job.kind==='channel_forward'?{type:'CHANNEL_FORWARD_TEST_V068',source:job.source,target:job.target,id:job.id}:job.kind==='forward'?{type:'FORWARD_TEST_V068',source:job.source,target:job.target,id:job.id}:job.kind==='send_forward'?{type:'SEND_FORWARD_TEST_V068',group:job.group,target:job.target,text:job.text,attachment:job.attachment,id:job.id}:{type:'SEND_TEST_V068',group:job.group,text:job.text,attachment:job.attachment,id:job.id});}
+  try{result=await chrome.tabs.sendMessage(tab.id,job.kind==='channel_forward'?{type:'CHANNEL_FORWARD_TEST_V0610',source:job.source,target:job.target,id:job.id}:job.kind==='forward'?{type:'FORWARD_TEST_V0610',source:job.source,target:job.target,id:job.id}:job.kind==='send_forward'?{type:'SEND_FORWARD_TEST_V0610',group:job.group,target:job.target,text:job.text,attachment:job.attachment,id:job.id}:{type:'SEND_TEST_V0610',group:job.group,text:job.text,attachment:job.attachment,id:job.id});}
   catch(error){throw Error('חיבור התוסף ללשונית אבד בזמן השליחה: '+String(error?.message||error).slice(0,180));}
   if(!result)throw Error('WhatsApp Web לא החזיר תשובה מניסיון השליחה');
   if(!result.ok){const err=new Error(result.error||'השליחה לא אושרה');err.metrics=result.metrics;throw err;}
   job.phase='attempted';const used=job.attachment?.id;job.attachment=null;await chrome.storage.local.set({[JOB]:job});if(used)cleanUpload(used).catch(()=>{});await status('attempted',job.kind==='channel_forward'?'בוצע ניסיון העברה מהערוץ — יש לאמת שהעדכון האחרון הופיע בקבוצת הבדיקות':job.kind==='forward'?'בוצע ניסיון העברה — יש לבדוק הופעת הודעה מועברת חדשה בקבוצת הבדיקות':job.kind==='send_forward'?'בוצעו שליחה והעברה — בדוק ששתי ההודעות מופיעות בקבוצה':'ניסיון שליחה בוצע; יש לבדוק בקבוצה שההודעה נראית');
   /* Delivery status is reported via STATUS_TEST */
- }catch(e){await status('failed',String(e.message||e),e.metrics||{});const r=await chrome.storage.local.get(JOB);if(r[JOB]){r[JOB].phase='failed';const used=r[JOB].attachment?.id;r[JOB].attachment=null;if(used)cleanUpload(used).catch(()=>{});r[JOB].error=String(e.message||e);await chrome.storage.local.set({[JOB]:r[JOB]});}/* Delivery status is reported via STATUS_TEST */}finally{ongoing=false}
+ }catch(e){await status('failed',String(e.message||e),e.metrics||{});const r=await chrome.storage.local.get(JOB);if(r[JOB]){r[JOB].phase='failed';const used=r[JOB].attachment?.id;r[JOB].attachment=null;if(used)cleanUpload(used).catch(()=>{});r[JOB].error=String(e.message||e);await chrome.storage.local.set({[JOB]:r[JOB]});}/* Delivery status is reported via STATUS_TEST */}finally{ongoing=false;await chrome.alarms.clear(WATCHDOG).catch(()=>{});}
 }
