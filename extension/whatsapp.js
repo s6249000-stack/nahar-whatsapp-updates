@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV0617)return;
-globalThis.__naharSchedulerAgentV0617=true;
+if(globalThis.__naharSchedulerAgentV0618)return;
+globalThis.__naharSchedulerAgentV0618=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -925,47 +925,7 @@ function activeTestChannel(){
  if(!verified)return null;
  return {root:main,header};
 }
-// The right sidebar can show the Archive drawer while the center continues
-// displaying the Channels Library. Treat that as ARCHIVE, never as a channel list.
-function archiveDrawerHeader(){
- const side=document.querySelector('#side')||document.querySelector('#pane-side');
- if(!side||!shown(side))return null;
- const bounds=side.getBoundingClientRect();
- const headings=[...side.querySelectorAll('h1,h2,h3,[role="heading"],span,div')]
-  .filter(shown).filter(e=>e.children.length<=1)
-  .filter(e=>{
-   const r=e.getBoundingClientRect(),txt=norm(e.textContent);
-   return /^(?:בארכיון|ארכיון|archived|archive)$/i.test(txt)&&
-    r.top>=bounds.top&&r.top<bounds.top+135&&r.width<240;
-  }).sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top);
- // Archive is an OPEN DRAWER only when its title is at the very top;
- // the ordinary chat list's "בארכיון" shortcut lies lower down.
- return headings[0]||null;
-}
-async function leaveArchiveDrawer(){
- const heading=archiveDrawerHeader();
- if(!heading)return true;
- const side=document.querySelector('#side')||document.querySelector('#pane-side');
- const box=heading.getBoundingClientRect();
- const header=heading.closest('header,[role="banner"]')||heading.parentElement?.parentElement;
- if(!header)return false;
- // Only a semantic Back button in the SAME Archive header is authorized.
- const buttons=[...header.querySelectorAll('button,[role="button"]')].filter(shown)
-  .filter(e=>{
-   const r=e.getBoundingClientRect();
-   const flags=[attr(e,'aria-label'),attr(e,'title'),attr(e,'data-testid'),
-    ...[...e.querySelectorAll('[data-icon]')].map(x=>attr(x,'data-icon'))].join(' ');
-   return r.width>=18&&r.width<90&&r.height>=18&&r.height<90&&
-    Math.abs((r.top+r.bottom)/2-(box.top+box.bottom)/2)<55&&
-    /(?:^|[^a-z])(back|arrow-back|chevron-right|go-back|חזרה)(?:$|[^a-z])/i.test(flags);
-  });
- if(buttons.length!==1)return false;
- buttons[0].click();
- for(let i=0;i<18;i++){await wait(120);if(!archiveDrawerHeader())return true;}
- return false;
-}
 function channelsHubEvidence(){
- if(archiveDrawerHeader())return false;
  const headings=[...document.querySelectorAll('h1,h2,h3,[role="heading"]')]
   .filter(shown).filter(e=>!e.closest('#main'));
  if(!headings.some(e=>/^(?:ערוצים|channels)$/i.test(norm(e.textContent))))return false;
@@ -1019,9 +979,7 @@ async function channelNavButton(){
  return null;
 }
 async function openChannelsHub(){
- if(activeTestChannel())return true;
- if(archiveDrawerHeader()&&!await leaveArchiveDrawer())throw Error('CHANNEL_ARCHIVE: הארכיון פתוח ולא זוהה כפתור חזרה בטוח; לא נלחץ יעד שגוי');
- if(channelsHubEvidence())return true;
+ if(channelsHubEvidence()||activeTestChannel())return true;
  // Ignore the Archive sidebar; it does not block navigation via the rail.
  const button=await channelNavButton();
  if(!button)throw Error('לא זוהה סמל "ערוצים" בסרגל הימני — לא נלחץ ארכיון');
@@ -1077,73 +1035,49 @@ function channelOwnedRows(){
  }
  return rows;
 }
-// Privacy-preserving progress checkpoints: fixed codes only, never names
-// or message contents. These survive when the final message reply is lost.
-async function channelProgress(id,step){
- if(!/^[a-f0-9-]{36}$/i.test(String(id||'')))return;
- if(!['NAV_START','HUB_READY','ROW_FOUND','ROW_MISSING','POINTER_DONE','CHANNEL_OPEN','FORWARD_START'].includes(step))return;
- try{await chrome.runtime.sendMessage({type:'WA_CHANNEL_PROGRESS_V0617',id,step});}catch{}
-}
 function findMainChannelRow(){
- // WhatsApp layout verified by the user: one owned channel directly below
- // the search box (around y=190 in a 1649px desktop screenshot).
- // Locate its VISIBLE text in the Channels sidebar, not search input types
- // or the mistaken second-row positional fallback.
- if(!channelsHubEvidence()||archiveDrawerHeader())return null;
+ const zone=channelOwnedZone();
+ if(!zone)return null;
  const side=document.querySelector('#side')||document.querySelector('#pane-side');
- if(!side||!shown(side))return null;
- const bounds=side.getBoundingClientRect();
- const key=lexical('ידידי ישיבת המקובלים');
- const leaves=[...document.querySelectorAll('span,div,[title],[aria-label]')]
+ const stable=lexical(CHANNEL_STABLE_PREFIX);
+ const leaves=[...side.querySelectorAll('span,[dir="auto"],[title],[aria-label],div')]
   .filter(shown).filter(e=>{
-   if(e.children.length>1)return false;
    const r=e.getBoundingClientRect(),cy=(r.top+r.bottom)/2;
-   if(cy<bounds.top+105||cy>bounds.top+315||
-    r.right<bounds.left||r.left>bounds.right||r.width>bounds.width+5)return false;
-   const titles=[attr(e,'title'),attr(e,'aria-label'),e.textContent].filter(Boolean);
-   return titles.some(t=>lexical(t).startsWith(key));
-  }).sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top||
-    a.getBoundingClientRect().height-b.getBoundingClientRect().height);
+   return cy>=zone.top&&cy<=zone.bottom&&r.left<zone.right&&r.right>zone.left&&
+    lexical(attr(e,'title')||attr(e,'aria-label')||(e.children.length?'':e.textContent)).startsWith(stable);
+  }).sort((a,b)=>a.children.length-b.children.length);
  for(const leaf of leaves){
   let node=leaf;
-  for(let i=0;i<9&&node&&node!==side;i++,node=node.parentElement){
-   const r=node.getBoundingClientRect(),cy=(r.top+r.bottom)/2;
-   if(cy<bounds.top+105||cy>bounds.top+315)break;
-   if(r.width>=Math.min(260,bounds.width*.60)&&r.height>=40&&r.height<=115&&
-      r.left>=bounds.left-6&&r.right<=bounds.right+6)
-    return node;
+  for(let i=0;i<8&&node&&node!==side;i++,node=node.parentElement){
+   const r=node.getBoundingClientRect();
+   if(r.width>=235&&r.height>=42&&r.height<=135)return node;
   }
  }
- return null;
+ // The WhatsApp sidebar may truncate the channel title and remove the
+ // complete [title] attribute. Restore the proven 0.6.2 second-row fallback,
+ // but ONLY inside the verified owned-Channels zone (never the chat archive).
+ const rows=channelOwnedRows();
+ return rows.length>=2?rows[1].el:null;
 }
-async function openMainChannel(jobId){
- await channelProgress(jobId,'NAV_START');
- if(activeTestChannel()){await channelProgress(jobId,'CHANNEL_OPEN');return true;}
- if(!await openChannelsHub())throw Error('CHANNEL_HUB: לשונית ערוצים לא נפתחה');
- await channelProgress(jobId,'HUB_READY');
- if(archiveDrawerHeader())throw Error('CHANNEL_ARCHIVE: מוצג ארכיון במקום רשימת הערוצים');
+async function openMainChannel(){
+ // The 0.6.2 workflow was confirmed to forward correctly. Preserve its
+ // channel discovery and do not click the sidebar again after a channel is open.
+ if(activeTestChannel())return true;
+ if(!await openChannelsHub())throw Error('לא נפתחה לשונית ערוצים ב־WhatsApp Web');
  for(let turn=0;turn<10;turn++){
-  if(!channelsHubEvidence()||archiveDrawerHeader())
-   throw Error('CHANNEL_ARCHIVE: רשימת הערוצים אינה פעילה');
   const row=findMainChannelRow();
   if(row){
-   await channelProgress(jobId,'ROW_FOUND');
-   const r=row.getBoundingClientRect();
-   // A real browser pointer click, exactly like the already working channel
-   // forward arrow. Center of title/row, NOT avatar or "Follow" buttons.
-   const x=Math.round(r.left+r.width*.62),y=Math.round((r.top+r.bottom)/2);
+   const r=row.getBoundingClientRect(),x=r.left+r.width*.55,y=r.top+r.height/2;
    const hit=document.elementFromPoint(x,y);
-   if(!hit||!(row===hit||row.contains(hit)))
-    throw Error('CHANNEL_ROW: מרכז שורת הערוץ מוסתר; לא נלחץ רכיב אחר');
-   await channelTrustedPointer(x,y,'left','open_main_channel');
-   await channelProgress(jobId,'POINTER_DONE');
-   for(let i=0;i<22;i++){await wait(150);if(activeTestChannel()){await channelProgress(jobId,'CHANNEL_OPEN');return true}}
-   throw Error('CHANNEL_ROW: בוצעה לחיצה אמיתית על השורה הראשונה אך הערוץ הראשי לא נפתח');
+   if(hit&&row.contains(hit))humanClick(hit);else humanClick(row);
+   for(let i=0;i<25;i++){
+    await wait(150);
+    if(activeTestChannel())return true;
+   }
   }
-  await wait(250);
+  await wait(320);
  }
- await channelProgress(jobId,'ROW_MISSING');
- throw Error('CHANNEL_ROW: שם הערוץ הראשי לא נמצא בשורה הראשונה; לא בוצעה לחיצה');
+ throw Error('רשימת הערוצים נפתחה, אך הערוץ הראשי לא זוהה. לא בוצעה העברה');
 }
 function channelForwardCandidates(view){
  const root=view.root,feed=root.getBoundingClientRect(),header=view.header.getBoundingClientRect();
@@ -1216,8 +1150,8 @@ function channelForwardCandidates(view){
   Math.abs(x.c.rect.left-top.c.rect.left)>12))return [];
  return [top.c.el];
 }
-async function channelTrustedPointer(x,y,button='left',intent='forward_arrow'){
- const result=await chrome.runtime.sendMessage({type:'WA_CHANNEL_POINTER_V058',button,x,y,intent});
+async function channelTrustedPointer(x,y,button='left'){
+ const result=await chrome.runtime.sendMessage({type:'WA_CHANNEL_POINTER_V058',button,x,y});
  if(!result?.ok)throw Error('WhatsApp לא אישר לחיצה על חץ ההעברה: '+(result?.error||'אין תשובה'));
 }
 async function waitChannelForwardDialog(){
@@ -1269,11 +1203,10 @@ async function openForwardPickerFromChannelArrow(channel,arrow){
  if(!dialog)throw Error('החץ וקליק ימני לא פתחו חלון העברה. '+channelMenuDiagnostic());
  return dialog;
 }
-async function forwardLastChannelUpdateToTest(source,target,jobId){
+async function forwardLastChannelUpdateToTest(source,target){
  if(source!==CHANNEL_TITLE_PREFIX||target!==FORWARD_TEST_GROUP)
   throw Error('ניסוי ערוץ מורשה רק מהערוץ המוגדר אל קבוצת הבדיקות');
- try{await openMainChannel(jobId);}catch(e){throw Error('CHANNEL_OPEN: '+String(e.message||e));}
- await channelProgress(jobId,'FORWARD_START');
+ try{await openMainChannel();}catch(e){throw Error('CHANNEL_OPEN: '+String(e.message||e));}
  const channel=activeTestChannel();
  if(!channel)throw Error('הערוץ הראשי לא אומת לאחר פתיחה אוטומטית — לא בוצעה העברה');
  // Only inspect the feed. No send is permitted until the exact group has
@@ -1332,15 +1265,15 @@ async function forwardLastChannelUpdateToTest(source,target,jobId){
  return {ok:true,detail:'בוצע ניסיון העברת העדכון האחרון מהערוץ לקבוצת הבדיקות'};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V0617'){reply({ok:true,version:'0.6.17',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(!['SEND_TEST_V0617','FORWARD_TEST_V0617','SEND_FORWARD_TEST_V0617','CHANNEL_FORWARD_TEST_V0617'].includes(msg?.type))return;
+ if(msg?.type==='WA_TEST_PING_V0618'){reply({ok:true,version:'0.6.18',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(!['SEND_TEST_V0618','FORWARD_TEST_V0618','SEND_FORWARD_TEST_V0618','CHANNEL_FORWARD_TEST_V0618'].includes(msg?.type))return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='CHANNEL_FORWARD_TEST_V0617'
-  ?forwardLastChannelUpdateToTest(msg.source,msg.target,msg.id)
-  :msg.type==='SEND_FORWARD_TEST_V0617'
+ const promise=msg.type==='CHANNEL_FORWARD_TEST_V0618'
+  ?forwardLastChannelUpdateToTest(msg.source,msg.target)
+  :msg.type==='SEND_FORWARD_TEST_V0618'
    ?sendThenForwardTest(msg.text,msg.attachment,msg.group,msg.target)
-  :msg.type==='FORWARD_TEST_V0617'
+  :msg.type==='FORWARD_TEST_V0618'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
