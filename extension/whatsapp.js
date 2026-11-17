@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV0614)return;
-globalThis.__naharSchedulerAgentV0614=true;
+if(globalThis.__naharSchedulerAgentV0615)return;
+globalThis.__naharSchedulerAgentV0615=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -1078,56 +1078,60 @@ function channelOwnedRows(){
  return rows;
 }
 function findMainChannelRow(){
- // Fixed layout verified in the user's screenshot: the main channel is the
- // FIRST owned channel immediately below the Channels search field. Never
- // select the second row, Follow recommendations, or an Archive row.
+ // WhatsApp layout verified by the user: one owned channel directly below
+ // the search box (around y=190 in a 1649px desktop screenshot).
+ // Locate its VISIBLE text in the Channels sidebar, not search input types
+ // or the mistaken second-row positional fallback.
  if(!channelsHubEvidence()||archiveDrawerHeader())return null;
  const side=document.querySelector('#side')||document.querySelector('#pane-side');
  if(!side||!shown(side))return null;
- const sr=side.getBoundingClientRect();
- const first=channelOwnedRows()[0]?.el;
- if(first)return first;
- // Some WhatsApp builds render the search as a styled div, not a textbox.
- // Anchor the first row to its visible avatar and require the channel title
- // beginning displayed in the screenshot, within the upper owned area.
- const key=lexical('ידידי ישיבת המקובלים נהר שלום');
- const leaves=[...side.querySelectorAll('span,[title],[dir="auto"]')]
-  .filter(shown).filter(el=>{
-   const r=el.getBoundingClientRect(),t=lexical(attr(el,'title')||(el.children.length?'':el.textContent));
-   return r.top>=sr.top+100&&r.top<sr.top+255&&
-     r.right<=sr.right+5&&r.left>=sr.left-5&&t.startsWith(key);
-  }).sort((x,y)=>x.getBoundingClientRect().top-y.getBoundingClientRect().top);
+ const bounds=side.getBoundingClientRect();
+ const key=lexical('ידידי ישיבת המקובלים');
+ const leaves=[...document.querySelectorAll('span,div,[title],[aria-label]')]
+  .filter(shown).filter(e=>{
+   if(e.children.length>1)return false;
+   const r=e.getBoundingClientRect(),cy=(r.top+r.bottom)/2;
+   if(cy<bounds.top+105||cy>bounds.top+315||
+    r.right<bounds.left||r.left>bounds.right||r.width>bounds.width+5)return false;
+   const titles=[attr(e,'title'),attr(e,'aria-label'),e.textContent].filter(Boolean);
+   return titles.some(t=>lexical(t).startsWith(key));
+  }).sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top||
+    a.getBoundingClientRect().height-b.getBoundingClientRect().height);
  for(const leaf of leaves){
-  for(let row=leaf,n=0;row&&row!==side&&n<8;row=row.parentElement,n++){
-   const r=row.getBoundingClientRect();
-   if(r.height>=45&&r.height<=120&&r.width>=Math.min(260,sr.width*.6)){
-    return row;
-   }
+  let node=leaf;
+  for(let i=0;i<9&&node&&node!==side;i++,node=node.parentElement){
+   const r=node.getBoundingClientRect(),cy=(r.top+r.bottom)/2;
+   if(cy<bounds.top+105||cy>bounds.top+315)break;
+   if(r.width>=Math.min(260,bounds.width*.60)&&r.height>=40&&r.height<=115&&
+      r.left>=bounds.left-6&&r.right<=bounds.right+6)
+    return node;
   }
  }
  return null;
 }
 async function openMainChannel(){
- // The 0.6.2 workflow was confirmed to forward correctly. Preserve its
- // channel discovery and do not click the sidebar again after a channel is open.
  if(activeTestChannel())return true;
- if(!await openChannelsHub())throw Error('לא נפתחה לשונית ערוצים ב־WhatsApp Web');
+ if(!await openChannelsHub())throw Error('CHANNEL_HUB: לשונית ערוצים לא נפתחה');
  if(archiveDrawerHeader())throw Error('CHANNEL_ARCHIVE: מוצג ארכיון במקום רשימת הערוצים');
  for(let turn=0;turn<10;turn++){
+  if(!channelsHubEvidence()||archiveDrawerHeader())
+   throw Error('CHANNEL_ARCHIVE: רשימת הערוצים אינה פעילה');
   const row=findMainChannelRow();
   if(row){
-   if(archiveDrawerHeader())throw Error('CHANNEL_ARCHIVE: נחסמה בחירת שורה מתוך הארכיון');
-   const r=row.getBoundingClientRect(),x=r.left+r.width*.55,y=r.top+r.height/2;
+   const r=row.getBoundingClientRect();
+   // A real browser pointer click, exactly like the already working channel
+   // forward arrow. Center of title/row, NOT avatar or "Follow" buttons.
+   const x=Math.round(r.left+r.width*.62),y=Math.round((r.top+r.bottom)/2);
    const hit=document.elementFromPoint(x,y);
-   if(hit&&row.contains(hit))humanClick(hit);else humanClick(row);
-   for(let i=0;i<25;i++){
-    await wait(150);
-    if(activeTestChannel())return true;
-   }
+   if(!hit||!(row===hit||row.contains(hit)))
+    throw Error('CHANNEL_ROW: מרכז שורת הערוץ מוסתר; לא נלחץ רכיב אחר');
+   await channelTrustedPointer(x,y,'left','open_main_channel');
+   for(let i=0;i<22;i++){await wait(150);if(activeTestChannel())return true}
+   throw Error('CHANNEL_ROW: בוצעה לחיצה אמיתית על השורה הראשונה אך הערוץ הראשי לא נפתח');
   }
-  await wait(320);
+  await wait(250);
  }
- throw Error('רשימת הערוצים נפתחה, אך הערוץ הראשי לא זוהה. לא בוצעה העברה');
+ throw Error('CHANNEL_ROW: שם הערוץ הראשי לא נמצא בשורה הראשונה; לא בוצעה לחיצה');
 }
 function channelForwardCandidates(view){
  const root=view.root,feed=root.getBoundingClientRect(),header=view.header.getBoundingClientRect();
@@ -1200,8 +1204,8 @@ function channelForwardCandidates(view){
   Math.abs(x.c.rect.left-top.c.rect.left)>12))return [];
  return [top.c.el];
 }
-async function channelTrustedPointer(x,y,button='left'){
- const result=await chrome.runtime.sendMessage({type:'WA_CHANNEL_POINTER_V058',button,x,y});
+async function channelTrustedPointer(x,y,button='left',intent='forward_arrow'){
+ const result=await chrome.runtime.sendMessage({type:'WA_CHANNEL_POINTER_V058',button,x,y,intent});
  if(!result?.ok)throw Error('WhatsApp לא אישר לחיצה על חץ ההעברה: '+(result?.error||'אין תשובה'));
 }
 async function waitChannelForwardDialog(){
@@ -1315,15 +1319,15 @@ async function forwardLastChannelUpdateToTest(source,target){
  return {ok:true,detail:'בוצע ניסיון העברת העדכון האחרון מהערוץ לקבוצת הבדיקות'};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V0614'){reply({ok:true,version:'0.6.14',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(!['SEND_TEST_V0614','FORWARD_TEST_V0614','SEND_FORWARD_TEST_V0614','CHANNEL_FORWARD_TEST_V0614'].includes(msg?.type))return;
+ if(msg?.type==='WA_TEST_PING_V0615'){reply({ok:true,version:'0.6.15',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(!['SEND_TEST_V0615','FORWARD_TEST_V0615','SEND_FORWARD_TEST_V0615','CHANNEL_FORWARD_TEST_V0615'].includes(msg?.type))return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='CHANNEL_FORWARD_TEST_V0614'
+ const promise=msg.type==='CHANNEL_FORWARD_TEST_V0615'
   ?forwardLastChannelUpdateToTest(msg.source,msg.target)
-  :msg.type==='SEND_FORWARD_TEST_V0614'
+  :msg.type==='SEND_FORWARD_TEST_V0615'
    ?sendThenForwardTest(msg.text,msg.attachment,msg.group,msg.target)
-  :msg.type==='FORWARD_TEST_V0614'
+  :msg.type==='FORWARD_TEST_V0615'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
