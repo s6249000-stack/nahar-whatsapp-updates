@@ -44,7 +44,12 @@ async function status(phase, detail='',metrics={}){
  // Status is pushed to the already-open, protected scheduler page. It uploads only whitelisted diagnostics.
  try{
   const tabs=await chrome.tabs.query({url:'https://nahar-shalom-tools.pages.dev/tools/whatsapp-scheduler/*'});
-  await Promise.all(tabs.map(t=>chrome.tabs.sendMessage(t.id,{type:'NAHAR_WA_DIAGNOSTIC_PUSH',status:event}).catch(()=>{})));
+  // Dashboard may be suspended after Chrome focuses WhatsApp. Its acknowledgement
+  // is NOT a prerequisite for sending and must never stall the worker.
+  await Promise.race([
+   Promise.all(tabs.map(t=>chrome.tabs.sendMessage(t.id,{type:'NAHAR_WA_DIAGNOSTIC_PUSH',status:event}).catch(()=>{}))),
+   new Promise(resolve=>setTimeout(resolve,900))
+  ]);
  }catch{}
 }
 async function setAlarm(job) {await chrome.alarms.clear(ALARM);await chrome.alarms.create(ALARM,{when:job.when});}
@@ -72,10 +77,13 @@ async function probeWhatsappTab(tab){
  for(let i=0;i<24;i++){
   try{
    let pong;
-   try{pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V0616'});}
+   try{pong=await Promise.race([chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V0617'}),new Promise((_,reject)=>setTimeout(()=>reject(Error('PING_NO_REPLY')),1500))]);}
    catch(e){
-    await chrome.scripting.executeScript({target:{tabId:tab.id},files:['whatsapp.js']});
-    pong=await chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V0616'});
+    await Promise.race([
+     chrome.scripting.executeScript({target:{tabId:tab.id},files:['whatsapp.js']}),
+     new Promise((_,reject)=>setTimeout(()=>reject(Error('INJECT_NO_REPLY')),2500))
+    ]);
+    pong=await Promise.race([chrome.tabs.sendMessage(tab.id,{type:'WA_TEST_PING_V0617'}),new Promise((_,reject)=>setTimeout(()=>reject(Error('PING_NO_REPLY')),1500))]);
    }
    if(pong?.ok&&(pong.hasSide||pong.hasMain))return pong;
    lastError='WhatsApp Web עדיין טוען את רשימת השיחות';
@@ -262,7 +270,7 @@ async function channelTrustedClick(sender,msg){
 // Authorized content agent reports fixed progress codes, not recipient,
 // channel text or message data. A persisted checkpoint survives lost replies.
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type!=='WA_CHANNEL_PROGRESS_V0616')return;
+ if(msg?.type!=='WA_CHANNEL_PROGRESS_V0617')return;
  (async()=>{
   const job=(await chrome.storage.local.get(JOB))[JOB];
   if(!sender.tab?.id||!sender.url?.startsWith('https://web.whatsapp.com/')||
@@ -377,11 +385,15 @@ async function sendDueJob(expectedId){
   const r=await chrome.storage.local.get(JOB),job=r[JOB];if(!job||job.phase!=='scheduled'||(expectedId&&job.id!==expectedId))return;
   if(Date.now()+1000<job.when){await setAlarm(job);return;}
   job.phase='processing';job.processingStartedAt=Date.now();await chrome.storage.local.set({[JOB]:job});await chrome.alarms.create(WATCHDOG,{when:Date.now()+120000});await status('processing',job.kind==='channel_forward'?'מנסה להעביר עדכון אחרון מהערוץ לקבוצת הבדיקות':job.kind==='forward'?'מבצע העברת הודעה אחרונה לקבוצת הבדיקות':job.kind==='send_forward'?'שולח הודעה ולאחר מכן מעביר אותה בקבוצת הבדיקות':'מנסה לפרסם בקבוצת הבדיקות');
+  await status('connection','WA_STAGE:BG_TAB');
   const tab=await activateWhatsappTab();
+  await status('connection','WA_STAGE:BG_PROBE');
   await probeWhatsappTab(tab);
+  await status('connection','WA_STAGE:BG_PING_OK');
   // Exactly one send attempt; errors are not automatically retried to avoid duplicate WhatsApp messages.
+  await status('connection','WA_STAGE:BG_DISPATCH');
   let result;
-  try{result=await Promise.race([chrome.tabs.sendMessage(tab.id,job.kind==='channel_forward'?{type:'CHANNEL_FORWARD_TEST_V0616',source:job.source,target:job.target,id:job.id}:job.kind==='forward'?{type:'FORWARD_TEST_V0616',source:job.source,target:job.target,id:job.id}:job.kind==='send_forward'?{type:'SEND_FORWARD_TEST_V0616',group:job.group,target:job.target,text:job.text,attachment:job.attachment,id:job.id}:{type:'SEND_TEST_V0616',group:job.group,text:job.text,attachment:job.attachment,id:job.id}),new Promise((_,reject)=>setTimeout(()=>reject(Error('RESPONSE_TIMEOUT: WhatsApp לא החזיר אישור בתוך 75 שניות; ייתכן שההודעה הועברה. יש לבדוק בקבוצת הבדיקות לפני כל ניסיון נוסף')),75000))]);}
+  try{result=await Promise.race([chrome.tabs.sendMessage(tab.id,job.kind==='channel_forward'?{type:'CHANNEL_FORWARD_TEST_V0617',source:job.source,target:job.target,id:job.id}:job.kind==='forward'?{type:'FORWARD_TEST_V0617',source:job.source,target:job.target,id:job.id}:job.kind==='send_forward'?{type:'SEND_FORWARD_TEST_V0617',group:job.group,target:job.target,text:job.text,attachment:job.attachment,id:job.id}:{type:'SEND_TEST_V0617',group:job.group,text:job.text,attachment:job.attachment,id:job.id}),new Promise((_,reject)=>setTimeout(()=>reject(Error('RESPONSE_TIMEOUT: WhatsApp לא החזיר אישור בתוך 75 שניות; ייתכן שההודעה הועברה. יש לבדוק בקבוצת הבדיקות לפני כל ניסיון נוסף')),75000))]);}
   catch(error){if(String(error?.message||error).includes('RESPONSE_TIMEOUT'))throw error;throw Error('חיבור התוסף ללשונית אבד בזמן השליחה: '+String(error?.message||error).slice(0,180));}
   if(!result)throw Error('WhatsApp Web לא החזיר תשובה מניסיון השליחה');
   if(!result.ok){const err=new Error(result.error||'השליחה לא אושרה');err.metrics=result.metrics;throw err;}
