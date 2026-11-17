@@ -1332,6 +1332,17 @@ async function forwardLastChannelUpdateToAuthorizedGroup(source,target){
  return {ok:true,detail:'בוצע ניסיון העברה ליעד שנבחר'};
 }
 
+function channelVisiblePosts(){
+ const main=document.querySelector('#main');
+ return main?[...main.querySelectorAll('article,[data-testid*="channel-update"],[data-testid*="channel-message"],[data-testid*="update-container"],[data-id]')]
+  .filter(shown).filter(e=>!e.closest('header,footer,[role="dialog"]')):[];
+}
+function channelPostSignature(){
+ const posts=channelVisiblePosts();
+ const last=posts.at(-1);
+ return {count:posts.length,id:last?.getAttribute('data-id')||'',
+   html:last?.outerHTML?.slice(0,2500)||'',text:norm(last?.innerText||last?.textContent||'')};
+}
 async function publishNewChannelUpdate(source,text,attachment){
  if(source!==CHANNEL_TITLE_PREFIX||typeof text!=='string'||(!text.trim()&&!attachment))
   throw Error('פרסום הערוץ דורש תוכן או קובץ ומקור מאושר');
@@ -1340,6 +1351,7 @@ async function publishNewChannelUpdate(source,text,attachment){
  const box=composer();
  if(!box)throw Error('שדה יצירת פרסום בערוץ לא נמצא; לא נשלח דבר');
  if(norm(box.innerText))throw Error('קיימת טיוטה בערוץ; הפרסום נעצר ללא מחיקתה');
+ const before=channelPostSignature();
  activeSendingGroup=source;
  if(attachment){
   await sendAttachment(attachment,text,source);
@@ -1358,12 +1370,15 @@ async function publishNewChannelUpdate(source,text,attachment){
  // WhatsApp renders a channel post asynchronously; allow its card to appear.
  for(let i=0;i<30;i++){
   if(!activeTestChannel())throw Error('ערוץ המקור השתנה לאחר הפרסום');
-  const main=document.querySelector('#main');
-  const cards=[...main.querySelectorAll('article,[data-testid*="channel-update"],[data-testid*="channel-message"],[data-testid*="update-container"],[data-id]')]
-   .filter(shown).filter(e=>!e.closest('header,footer,[role="dialog"]'));
-  if(cards.length&&(!text.trim()||cards.slice(-3).some(e=>norm(e.innerText||e.textContent).includes(norm(text).slice(0,Math.min(80,norm(text).length)))))){
-   await wait(350);return {ok:true};
-  }
+  const after=channelPostSignature();
+  const changed=after.count>0&&(after.count!==before.count||
+     (after.id&&after.id!==before.id)||
+     (after.text&&after.text!==before.text)||
+     (after.html&&after.html!==before.html));
+  const expected=norm(text);
+  const visibleText=!expected||channelVisiblePosts().slice(-3).some(e=>
+    norm(e.innerText||e.textContent).includes(expected.slice(0,Math.min(80,expected.length))));
+  if(changed&&visibleText){await wait(350);return {ok:true};}
   await wait(240);
  }
  throw Error('הפרסום נשלח לעורך אך לא אותר העדכון החדש בערוץ — לא בוצעה העברה כדי למנוע העברת פרסום ישן');
