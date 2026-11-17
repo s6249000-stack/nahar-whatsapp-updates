@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV0612)return;
-globalThis.__naharSchedulerAgentV0612=true;
+if(globalThis.__naharSchedulerAgentV0613)return;
+globalThis.__naharSchedulerAgentV0613=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -1078,50 +1078,66 @@ function channelOwnedRows(){
  return rows;
 }
 function findMainChannelRow(){
- const zone=channelOwnedZone();
- if(!zone)return null;
+ // The exact channel is the FIRST owned-channel row in the user's current
+ // WhatsApp layout. Previous attempts failed because the search input can
+ // be a non-input element and the zone-based fallback expected two rows.
+ if(!channelsHubEvidence()||archiveDrawerHeader())return null;
  const side=document.querySelector('#side')||document.querySelector('#pane-side');
- const stable=lexical(CHANNEL_STABLE_PREFIX);
- const leaves=[...side.querySelectorAll('span,[dir="auto"],[title],[aria-label],div')]
+ if(!side||!shown(side))return null;
+ const bounds=side.getBoundingClientRect();
+ const prefix=lexical('ידידי ישיבת המקובלים נהר שלום');
+ // Match channel title, not ordinal position. Visible truncation after
+ // "הרב בני..." is fine. Ignore matched text inside child preview snippets.
+ const matches=[...side.querySelectorAll('[title],[aria-label],span[dir="auto"],span,div[dir="auto"]')]
   .filter(shown).filter(e=>{
    const r=e.getBoundingClientRect(),cy=(r.top+r.bottom)/2;
-   return cy>=zone.top&&cy<=zone.bottom&&r.left<zone.right&&r.right>zone.left&&
-    lexical(attr(e,'title')||attr(e,'aria-label')||(e.children.length?'':e.textContent)).startsWith(stable);
-  }).sort((a,b)=>a.children.length-b.children.length);
- for(const leaf of leaves){
-  let node=leaf;
-  for(let i=0;i<8&&node&&node!==side;i++,node=node.parentElement){
-   const r=node.getBoundingClientRect();
-   if(r.width>=235&&r.height>=42&&r.height<=135)return node;
+   if(cy<bounds.top+70||cy>Math.min(bounds.bottom,bounds.top+420)||
+      r.left<bounds.left-5||r.right>bounds.right+5)return false;
+   const names=[attr(e,'title'),attr(e,'aria-label'),
+    e.children.length===0?e.textContent:''].filter(Boolean);
+   return names.some(t=>lexical(t).startsWith(prefix));
+  }).sort((x,y)=>{
+   const a=x.getBoundingClientRect(),b=y.getBoundingClientRect();
+   return a.height-b.height||a.width-b.width;
+  });
+ for(const e of matches){
+  let row=e;
+  for(let n=0;row&&row!==side&&n<9;row=row.parentElement,n++){
+   const r=row.getBoundingClientRect(),cy=(r.top+r.bottom)/2;
+   if(cy<bounds.top+70||cy>bounds.top+420)break;
+   if(r.width>=Math.min(260,bounds.width*.62)&&r.height>=42&&r.height<=125){
+    // The row itself must still contain the explicitly verified title.
+    return row;
+   }
   }
  }
- // The WhatsApp sidebar may truncate the channel title and remove the
- // complete [title] attribute. Restore the proven 0.6.2 second-row fallback,
- // but ONLY inside the verified owned-Channels zone (never the chat archive).
- const rows=channelOwnedRows();
- return rows.length>=2?rows[1].el:null;
+ return null;
 }
 async function openMainChannel(){
- // The 0.6.2 workflow was confirmed to forward correctly. Preserve its
- // channel discovery and do not click the sidebar again after a channel is open.
  if(activeTestChannel())return true;
- if(!await openChannelsHub())throw Error('לא נפתחה לשונית ערוצים ב־WhatsApp Web');
- if(archiveDrawerHeader())throw Error('CHANNEL_ARCHIVE: מוצג ארכיון במקום רשימת הערוצים');
- for(let turn=0;turn<10;turn++){
+ if(!await openChannelsHub())throw Error('CHANNEL_HUB: לשונית ערוצים לא נפתחה');
+ if(archiveDrawerHeader())throw Error('CHANNEL_ARCHIVE: מוצג ארכיון במקום ערוצים');
+ for(let turn=0;turn<5;turn++){
+  if(!channelsHubEvidence()||archiveDrawerHeader())
+   throw Error('CHANNEL_ARCHIVE: רשימת הערוצים אינה פעילה');
   const row=findMainChannelRow();
   if(row){
-   if(archiveDrawerHeader())throw Error('CHANNEL_ARCHIVE: נחסמה בחירת שורה מתוך הארכיון');
-   const r=row.getBoundingClientRect(),x=r.left+r.width*.55,y=r.top+r.height/2;
-   const hit=document.elementFromPoint(x,y);
-   if(hit&&row.contains(hit))humanClick(hit);else humanClick(row);
-   for(let i=0;i<25;i++){
+   // One native click on the matched title-bearing row; never click a
+   // guessed second row, a preview, or an archive shortcut.
+   const title=[...row.querySelectorAll('[title],span[dir="auto"],span')]
+    .filter(shown).find(e=>{
+     const t=attr(e,'title')||(e.children.length?'':e.textContent);
+     return lexical(t).startsWith(lexical('ידידי ישיבת המקובלים נהר שלום'));
+    });
+   (title||row).click();
+   for(let i=0;i<18;i++){
     await wait(150);
     if(activeTestChannel())return true;
    }
   }
-  await wait(320);
+  await wait(250);
  }
- throw Error('רשימת הערוצים נפתחה, אך הערוץ הראשי לא זוהה. לא בוצעה העברה');
+ throw Error('CHANNEL_ROW: רשימת הערוצים פתוחה אך הערוץ הראשי לא נפתח לפי שמו; אין העברה');
 }
 function channelForwardCandidates(view){
  const root=view.root,feed=root.getBoundingClientRect(),header=view.header.getBoundingClientRect();
@@ -1309,15 +1325,15 @@ async function forwardLastChannelUpdateToTest(source,target){
  return {ok:true,detail:'בוצע ניסיון העברת העדכון האחרון מהערוץ לקבוצת הבדיקות'};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V0612'){reply({ok:true,version:'0.6.12',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(!['SEND_TEST_V0612','FORWARD_TEST_V0612','SEND_FORWARD_TEST_V0612','CHANNEL_FORWARD_TEST_V0612'].includes(msg?.type))return;
+ if(msg?.type==='WA_TEST_PING_V0613'){reply({ok:true,version:'0.6.13',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(!['SEND_TEST_V0613','FORWARD_TEST_V0613','SEND_FORWARD_TEST_V0613','CHANNEL_FORWARD_TEST_V0613'].includes(msg?.type))return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='CHANNEL_FORWARD_TEST_V0612'
+ const promise=msg.type==='CHANNEL_FORWARD_TEST_V0613'
   ?forwardLastChannelUpdateToTest(msg.source,msg.target)
-  :msg.type==='SEND_FORWARD_TEST_V0612'
+  :msg.type==='SEND_FORWARD_TEST_V0613'
    ?sendThenForwardTest(msg.text,msg.attachment,msg.group,msg.target)
-  :msg.type==='FORWARD_TEST_V0612'
+  :msg.type==='FORWARD_TEST_V0613'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
