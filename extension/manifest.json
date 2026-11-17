@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "נהר שלום - תזמון וואטסאפ (בדיקות)",
-  "version": "0.6.19",
-  "description": "תזמון ניסיון לקבוצה פנימית; Shift+Enter מדויק באמצעות הרשאת דיבוג זמנית ללשונית WhatsApp בלבד",
+  "name": "נהר שלום - תזמון ופרסום WhatsApp",
+  "version": "0.6.20",
+  "description": "פרסום מיידי בערוץ והעברה לקבוצות, תזמון ובדיקות WhatsApp Web",
   "permissions": [
     "alarms",
     "storage",
@@ -37,6 +37,6 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "נהר שלום - תזמון בדיקות"
+    "default_title": "נהר שלום - WhatsApp"
   }
 }
