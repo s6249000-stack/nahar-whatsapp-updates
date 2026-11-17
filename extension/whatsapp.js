@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV0618)return;
-globalThis.__naharSchedulerAgentV0618=true;
+if(globalThis.__naharSchedulerAgentV0619)return;
+globalThis.__naharSchedulerAgentV0619=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -1264,16 +1264,99 @@ async function forwardLastChannelUpdateToTest(source,target){
  if(forwardingDialog())throw Error('חלון ההעברה נשאר פתוח — אין אישור שהניסיון הושלם');
  return {ok:true,detail:'בוצע ניסיון העברת העדכון האחרון מהערוץ לקבוצת הבדיקות'};
 }
+const REAL_CHANNEL_GROUPS=Object.freeze([
+ '♦️הרב בניהו שמואלי הרישמי♦️',
+ '♦️הרב בניהו שמואלי הרשמי 2️⃣♦️',
+ 'סטטוסים | ישיבת המקובלים נהר שלום | הרב בניהו שמואלי שליט"א'
+]);
+async function forwardLastChannelUpdateToAuthorizedGroup(source,target){
+ if(source!==CHANNEL_TITLE_PREFIX||!REAL_CHANNEL_GROUPS.includes(target))
+  throw Error('העברה מורשית רק מערוץ המקור אל קבוצה מאושרת');
+ try{await openMainChannel();}catch(e){throw Error('CHANNEL_OPEN: '+String(e.message||e));}
+ const channel=activeTestChannel();
+ if(!channel)throw Error('הערוץ הראשי לא אומת לאחר פתיחה אוטומטית — לא בוצעה העברה');
+ // Only inspect the feed. No send is permitted until the exact group has
+ // been visibly selected in WhatsApp's native forwarding dialog.
+ const scrollable=[...channel.root.querySelectorAll('*')].filter(shown).filter(e=>{
+  const cs=getComputedStyle(e);
+  return /auto|scroll/.test(cs.overflowY)&&e.clientHeight>160&&e.scrollHeight>e.clientHeight+100;
+ }).sort((x,y)=>y.clientHeight-x.clientHeight)[0];
+ if(scrollable){
+  scrollable.scrollTop=scrollable.scrollHeight;
+  scrollable.dispatchEvent(new Event('scroll',{bubbles:true}));
+  await wait(600);
+ }
+ let actions=channelForwardCandidates(channel);
+ if(!actions.length){
+  const posts=[...channel.root.querySelectorAll('article,[data-testid*="channel-update"],[data-testid*="channel-message"],[data-testid*="update-container"],[data-id]')]
+   .filter(shown).filter(e=>!e.closest('header,footer,[role="dialog"]'));
+  const last=posts.at(-1);
+  if(last){
+   last.scrollIntoView({block:'end'});
+   last.dispatchEvent(new MouseEvent('mouseover',{bubbles:true,view:window}));
+   last.dispatchEvent(new PointerEvent('pointerover',{bubbles:true,view:window,pointerType:'mouse'}));
+   await wait(500);
+   actions=channelForwardCandidates(channel);
+  }
+ }
+ if(!actions.length)throw Error('CHANNEL_ARROW: הערוץ פתוח, אך לא נמצא חץ העברה גלוי. מועמדים '+actions.length);
+ // WhatsApp documents a dedicated Forward arrow next to each channel update.
+ // Last visible button at feed bottom corresponds to the last update.
+ const button=actions.at(-1);
+ if(!activeTestChannel())throw Error('הערוץ השתנה לפני בחירת העדכון');
+ let dialog;try{dialog=await openForwardPickerFromChannelArrow(channel,button)}catch(e){throw Error('CHANNEL_PICKER: '+String(e.message||e))}
+ dialog=await stableForwardDialog();
+ if(!dialog)throw Error('חלון בחירת היעד מהערוץ לא התייצב');
+ const input=[...dialog.querySelectorAll('input,[contenteditable="true"],[role="textbox"]')].find(shown);
+ if(input&&!readSearch(input).trim())setSearch(input,target.startsWith('♦️')?'הרב בניהו שמואלי':'סטטוסים');
+ let clicked=false;
+ for(let i=0;i<32;i++){
+  dialog=await stableForwardDialog(1)||dialog;
+  const selected=forwardChoice(dialog,target);
+  if(selected){
+   if(forwardSelectionState(dialog,selected,target).selected)break;
+   if(!clicked){humanClick(selected);clicked=true}
+  }
+  await wait(170);
+ }
+ dialog=await stableForwardDialog(2);
+ const row=dialog&&forwardChoice(dialog,target);
+ if(!row||!forwardSelectionState(dialog,row,target).selected)
+  throw Error('קבוצת היעד לא זוהתה כבחירה מדויקת; לא בוצעה העברה');
+ const confirm=forwardConfirm(dialog);
+ if(!confirm)throw Error('קבוצת היעד מסומנת, אך חץ אישור ההעברה לא זוהה. '+forwardConfirmDiagnostics(dialog));
+ humanClick(confirm);
+ await wait(1150);
+ if(forwardingDialog())throw Error('חלון ההעברה נשאר פתוח — אין אישור שהניסיון הושלם');
+ return {ok:true,detail:'בוצע ניסיון העברה ליעד שנבחר'};
+}
+
+async function forwardLastChannelUpdateToRealGroups(source,targets){
+ if(source!==CHANNEL_TITLE_PREFIX||!Array.isArray(targets)||
+    targets.length<1||targets.length>3||new Set(targets).size!==targets.length||
+    !targets.every(t=>REAL_CHANNEL_GROUPS.includes(t)))
+  throw Error('נבחרו יעדים לא מורשים או כפולים; בוטלה ההעברה');
+ const completed=[];
+ for(const target of targets){
+  try{await forwardLastChannelUpdateToAuthorizedGroup(source,target);completed.push(target);}
+  catch(e){
+   throw Error('העברה קבוצתית נעצרה לאחר '+completed.length+' קבוצות שהושלמו בממשק. אין לבצע ניסיון חוזר לפני בדיקה בקבוצות. '+String(e.message||e));
+  }
+ }
+ return {ok:true,detail:'בוצעו ניסיונות העברה אל '+completed.length+' קבוצות נבחרות; יש לוודא קבלה בקבוצות'};
+}
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V0618'){reply({ok:true,version:'0.6.18',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(!['SEND_TEST_V0618','FORWARD_TEST_V0618','SEND_FORWARD_TEST_V0618','CHANNEL_FORWARD_TEST_V0618'].includes(msg?.type))return;
+ if(msg?.type==='WA_TEST_PING_V0619'){reply({ok:true,version:'0.6.19',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(!['SEND_TEST_V0619','FORWARD_TEST_V0619','SEND_FORWARD_TEST_V0619','CHANNEL_FORWARD_TEST_V0619','CHANNEL_FORWARD_REAL_V0619'].includes(msg?.type))return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='CHANNEL_FORWARD_TEST_V0618'
+ const promise=msg.type==='CHANNEL_FORWARD_REAL_V0619'
+  ?forwardLastChannelUpdateToRealGroups(msg.source,msg.targets)
+  :msg.type==='CHANNEL_FORWARD_TEST_V0619'
   ?forwardLastChannelUpdateToTest(msg.source,msg.target)
-  :msg.type==='SEND_FORWARD_TEST_V0618'
+  :msg.type==='SEND_FORWARD_TEST_V0619'
    ?sendThenForwardTest(msg.text,msg.attachment,msg.group,msg.target)
-  :msg.type==='FORWARD_TEST_V0618'
+  :msg.type==='FORWARD_TEST_V0619'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
