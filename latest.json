@@ -1,11 +1,11 @@
 {
-  "version": "0.6.19",
+  "version": "0.6.20",
   "files": [
     "manifest.json",
     "background.js",
     "bridge.js",
     "whatsapp.js"
   ],
-  "description": "Public extension code only; no session data or private targets",
-  "updated": "2026-11-16"
+  "description": "Channel publishing and forwarding update",
+  "updated": "2026-11-17"
 }
