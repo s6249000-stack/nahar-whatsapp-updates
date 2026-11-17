@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV0610)return;
-globalThis.__naharSchedulerAgentV0610=true;
+if(globalThis.__naharSchedulerAgentV0611)return;
+globalThis.__naharSchedulerAgentV0611=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -1265,15 +1265,15 @@ async function forwardLastChannelUpdateToTest(source,target){
  return {ok:true,detail:'בוצע ניסיון העברת העדכון האחרון מהערוץ לקבוצת הבדיקות'};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V0610'){reply({ok:true,version:'0.6.10',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(!['SEND_TEST_V0610','FORWARD_TEST_V0610','SEND_FORWARD_TEST_V0610','CHANNEL_FORWARD_TEST_V0610'].includes(msg?.type))return;
+ if(msg?.type==='WA_TEST_PING_V0611'){reply({ok:true,version:'0.6.11',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(!['SEND_TEST_V0611','FORWARD_TEST_V0611','SEND_FORWARD_TEST_V0611','CHANNEL_FORWARD_TEST_V0611'].includes(msg?.type))return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='CHANNEL_FORWARD_TEST_V0610'
+ const promise=msg.type==='CHANNEL_FORWARD_TEST_V0611'
   ?forwardLastChannelUpdateToTest(msg.source,msg.target)
-  :msg.type==='SEND_FORWARD_TEST_V0610'
+  :msg.type==='SEND_FORWARD_TEST_V0611'
    ?sendThenForwardTest(msg.text,msg.attachment,msg.group,msg.target)
-  :msg.type==='FORWARD_TEST_V0610'
+  :msg.type==='FORWARD_TEST_V0611'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
