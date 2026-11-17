@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV0615)return;
-globalThis.__naharSchedulerAgentV0615=true;
+if(globalThis.__naharSchedulerAgentV0616)return;
+globalThis.__naharSchedulerAgentV0616=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -1077,6 +1077,13 @@ function channelOwnedRows(){
  }
  return rows;
 }
+// Privacy-preserving progress checkpoints: fixed codes only, never names
+// or message contents. These survive when the final message reply is lost.
+async function channelProgress(id,step){
+ if(!/^[a-f0-9-]{36}$/i.test(String(id||'')))return;
+ if(!['NAV_START','HUB_READY','ROW_FOUND','ROW_MISSING','POINTER_DONE','CHANNEL_OPEN','FORWARD_START'].includes(step))return;
+ try{await chrome.runtime.sendMessage({type:'WA_CHANNEL_PROGRESS_V0616',id,step});}catch{}
+}
 function findMainChannelRow(){
  // WhatsApp layout verified by the user: one owned channel directly below
  // the search box (around y=190 in a 1649px desktop screenshot).
@@ -1109,15 +1116,18 @@ function findMainChannelRow(){
  }
  return null;
 }
-async function openMainChannel(){
- if(activeTestChannel())return true;
+async function openMainChannel(jobId){
+ await channelProgress(jobId,'NAV_START');
+ if(activeTestChannel()){await channelProgress(jobId,'CHANNEL_OPEN');return true;}
  if(!await openChannelsHub())throw Error('CHANNEL_HUB: לשונית ערוצים לא נפתחה');
+ await channelProgress(jobId,'HUB_READY');
  if(archiveDrawerHeader())throw Error('CHANNEL_ARCHIVE: מוצג ארכיון במקום רשימת הערוצים');
  for(let turn=0;turn<10;turn++){
   if(!channelsHubEvidence()||archiveDrawerHeader())
    throw Error('CHANNEL_ARCHIVE: רשימת הערוצים אינה פעילה');
   const row=findMainChannelRow();
   if(row){
+   await channelProgress(jobId,'ROW_FOUND');
    const r=row.getBoundingClientRect();
    // A real browser pointer click, exactly like the already working channel
    // forward arrow. Center of title/row, NOT avatar or "Follow" buttons.
@@ -1126,11 +1136,13 @@ async function openMainChannel(){
    if(!hit||!(row===hit||row.contains(hit)))
     throw Error('CHANNEL_ROW: מרכז שורת הערוץ מוסתר; לא נלחץ רכיב אחר');
    await channelTrustedPointer(x,y,'left','open_main_channel');
-   for(let i=0;i<22;i++){await wait(150);if(activeTestChannel())return true}
+   await channelProgress(jobId,'POINTER_DONE');
+   for(let i=0;i<22;i++){await wait(150);if(activeTestChannel()){await channelProgress(jobId,'CHANNEL_OPEN');return true}}
    throw Error('CHANNEL_ROW: בוצעה לחיצה אמיתית על השורה הראשונה אך הערוץ הראשי לא נפתח');
   }
   await wait(250);
  }
+ await channelProgress(jobId,'ROW_MISSING');
  throw Error('CHANNEL_ROW: שם הערוץ הראשי לא נמצא בשורה הראשונה; לא בוצעה לחיצה');
 }
 function channelForwardCandidates(view){
@@ -1257,10 +1269,11 @@ async function openForwardPickerFromChannelArrow(channel,arrow){
  if(!dialog)throw Error('החץ וקליק ימני לא פתחו חלון העברה. '+channelMenuDiagnostic());
  return dialog;
 }
-async function forwardLastChannelUpdateToTest(source,target){
+async function forwardLastChannelUpdateToTest(source,target,jobId){
  if(source!==CHANNEL_TITLE_PREFIX||target!==FORWARD_TEST_GROUP)
   throw Error('ניסוי ערוץ מורשה רק מהערוץ המוגדר אל קבוצת הבדיקות');
- try{await openMainChannel();}catch(e){throw Error('CHANNEL_OPEN: '+String(e.message||e));}
+ try{await openMainChannel(jobId);}catch(e){throw Error('CHANNEL_OPEN: '+String(e.message||e));}
+ await channelProgress(jobId,'FORWARD_START');
  const channel=activeTestChannel();
  if(!channel)throw Error('הערוץ הראשי לא אומת לאחר פתיחה אוטומטית — לא בוצעה העברה');
  // Only inspect the feed. No send is permitted until the exact group has
@@ -1319,15 +1332,15 @@ async function forwardLastChannelUpdateToTest(source,target){
  return {ok:true,detail:'בוצע ניסיון העברת העדכון האחרון מהערוץ לקבוצת הבדיקות'};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V0615'){reply({ok:true,version:'0.6.15',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(!['SEND_TEST_V0615','FORWARD_TEST_V0615','SEND_FORWARD_TEST_V0615','CHANNEL_FORWARD_TEST_V0615'].includes(msg?.type))return;
+ if(msg?.type==='WA_TEST_PING_V0616'){reply({ok:true,version:'0.6.16',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(!['SEND_TEST_V0616','FORWARD_TEST_V0616','SEND_FORWARD_TEST_V0616','CHANNEL_FORWARD_TEST_V0616'].includes(msg?.type))return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='CHANNEL_FORWARD_TEST_V0615'
-  ?forwardLastChannelUpdateToTest(msg.source,msg.target)
-  :msg.type==='SEND_FORWARD_TEST_V0615'
+ const promise=msg.type==='CHANNEL_FORWARD_TEST_V0616'
+  ?forwardLastChannelUpdateToTest(msg.source,msg.target,msg.id)
+  :msg.type==='SEND_FORWARD_TEST_V0616'
    ?sendThenForwardTest(msg.text,msg.attachment,msg.group,msg.target)
-  :msg.type==='FORWARD_TEST_V0615'
+  :msg.type==='FORWARD_TEST_V0616'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
