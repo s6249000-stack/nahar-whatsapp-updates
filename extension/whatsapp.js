@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV0619)return;
-globalThis.__naharSchedulerAgentV0619=true;
+if(globalThis.__naharSchedulerAgentV0620)return;
+globalThis.__naharSchedulerAgentV0620=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -32,6 +32,7 @@ function currentNames(){
  return [...new Set(values)];
 }
 function currentMatches(name){
+ if(name===CHANNEL_TITLE_PREFIX)return !!activeTestChannel();
  const desired=lexical(name);
  return desired.length>=8&&currentNames().some(v=>lexical(v)===desired);
 }
@@ -1331,6 +1332,51 @@ async function forwardLastChannelUpdateToAuthorizedGroup(source,target){
  return {ok:true,detail:'בוצע ניסיון העברה ליעד שנבחר'};
 }
 
+async function publishNewChannelUpdate(source,text,attachment){
+ if(source!==CHANNEL_TITLE_PREFIX||typeof text!=='string'||(!text.trim()&&!attachment))
+  throw Error('פרסום הערוץ דורש תוכן או קובץ ומקור מאושר');
+ await openMainChannel();
+ if(!activeTestChannel())throw Error('הערוץ הראשי לא נפתח');
+ const box=composer();
+ if(!box)throw Error('שדה יצירת פרסום בערוץ לא נמצא; לא נשלח דבר');
+ if(norm(box.innerText))throw Error('קיימת טיוטה בערוץ; הפרסום נעצר ללא מחיקתה');
+ activeSendingGroup=source;
+ if(attachment){
+  await sendAttachment(attachment,text,source);
+ }else{
+  await fillComposer(box,text);
+  await holdForLinkPreview(text,source);
+  if(!activeTestChannel())throw Error('הערוץ השתנה בזמן הכנת הפרסום');
+  const button=sendButton();
+  if(!button)throw Error('כפתור פרסום הערוץ לא נמצא — ההודעה נשארה כטיוטה');
+  button.click();
+  await wait(950);
+  if(!activeTestChannel())throw Error('לא ניתן לאמת את הערוץ לאחר הפרסום');
+  if(norm(composer()?.innerText||''))throw Error('טיוטת הערוץ עדיין מכילה טקסט; אין אישור שהפרסום התבצע');
+ }
+ // Do not forward an earlier update if the new post is not visible in the feed.
+ // WhatsApp renders a channel post asynchronously; allow its card to appear.
+ for(let i=0;i<30;i++){
+  if(!activeTestChannel())throw Error('ערוץ המקור השתנה לאחר הפרסום');
+  const main=document.querySelector('#main');
+  const cards=[...main.querySelectorAll('article,[data-testid*="channel-update"],[data-testid*="channel-message"],[data-testid*="update-container"],[data-id]')]
+   .filter(shown).filter(e=>!e.closest('header,footer,[role="dialog"]'));
+  if(cards.length&&(!text.trim()||cards.slice(-3).some(e=>norm(e.innerText||e.textContent).includes(norm(text).slice(0,Math.min(80,norm(text).length)))))){
+   await wait(350);return {ok:true};
+  }
+  await wait(240);
+ }
+ throw Error('הפרסום נשלח לעורך אך לא אותר העדכון החדש בערוץ — לא בוצעה העברה כדי למנוע העברת פרסום ישן');
+}
+async function publishChannelThenForward(source,targets,text,attachment){
+ if(source!==CHANNEL_TITLE_PREFIX||!Array.isArray(targets)||targets.length<1||
+    targets.length>3||new Set(targets).size!==targets.length||
+    !targets.every(t=>REAL_CHANNEL_GROUPS.includes(t)))
+  throw Error('יעדי פרסום הערוץ אינם מורשים');
+ await publishNewChannelUpdate(source,text,attachment);
+ try{return await forwardLastChannelUpdateToRealGroups(source,targets)}
+ catch(e){throw Error('הפרסום בערוץ בוצע; ההעברה לקבוצות נעצרה: '+String(e.message||e))}
+}
 async function forwardLastChannelUpdateToRealGroups(source,targets){
  if(source!==CHANNEL_TITLE_PREFIX||!Array.isArray(targets)||
     targets.length<1||targets.length>3||new Set(targets).size!==targets.length||
@@ -1346,11 +1392,13 @@ async function forwardLastChannelUpdateToRealGroups(source,targets){
  return {ok:true,detail:'בוצעו ניסיונות העברה אל '+completed.length+' קבוצות נבחרות; יש לוודא קבלה בקבוצות'};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V0619'){reply({ok:true,version:'0.6.19',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(!['SEND_TEST_V0619','FORWARD_TEST_V0619','SEND_FORWARD_TEST_V0619','CHANNEL_FORWARD_TEST_V0619','CHANNEL_FORWARD_REAL_V0619'].includes(msg?.type))return;
+ if(msg?.type==='WA_TEST_PING_V0619'){reply({ok:true,version:'0.6.20',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(!['SEND_TEST_V0619','FORWARD_TEST_V0619','SEND_FORWARD_TEST_V0619','CHANNEL_FORWARD_TEST_V0619','CHANNEL_FORWARD_REAL_V0619','CHANNEL_PUBLISH_REAL_V0620'].includes(msg?.type))return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='CHANNEL_FORWARD_REAL_V0619'
+ const promise=msg.type==='CHANNEL_PUBLISH_REAL_V0620'
+  ?publishChannelThenForward(msg.source,msg.targets,msg.text,msg.attachment)
+  :msg.type==='CHANNEL_FORWARD_REAL_V0619'
   ?forwardLastChannelUpdateToRealGroups(msg.source,msg.targets)
   :msg.type==='CHANNEL_FORWARD_TEST_V0619'
   ?forwardLastChannelUpdateToTest(msg.source,msg.target)
