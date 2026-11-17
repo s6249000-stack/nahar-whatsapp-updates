@@ -2,8 +2,8 @@
 'use strict';
 // Based on the proven UI interaction sequence in the user's Zmanim-to-WhatsApp extension.
 // Separate versioned handler prevents stale extension scripts from intercepting a send.
-if(globalThis.__naharSchedulerAgentV0616)return;
-globalThis.__naharSchedulerAgentV0616=true;
+if(globalThis.__naharSchedulerAgentV0617)return;
+globalThis.__naharSchedulerAgentV0617=true;
 let sending=false;
 let activeSendingGroup='';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
@@ -1082,7 +1082,7 @@ function channelOwnedRows(){
 async function channelProgress(id,step){
  if(!/^[a-f0-9-]{36}$/i.test(String(id||'')))return;
  if(!['NAV_START','HUB_READY','ROW_FOUND','ROW_MISSING','POINTER_DONE','CHANNEL_OPEN','FORWARD_START'].includes(step))return;
- try{await chrome.runtime.sendMessage({type:'WA_CHANNEL_PROGRESS_V0616',id,step});}catch{}
+ try{await chrome.runtime.sendMessage({type:'WA_CHANNEL_PROGRESS_V0617',id,step});}catch{}
 }
 function findMainChannelRow(){
  // WhatsApp layout verified by the user: one owned channel directly below
@@ -1332,15 +1332,15 @@ async function forwardLastChannelUpdateToTest(source,target,jobId){
  return {ok:true,detail:'בוצע ניסיון העברת העדכון האחרון מהערוץ לקבוצת הבדיקות'};
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
- if(msg?.type==='WA_TEST_PING_V0616'){reply({ok:true,version:'0.6.16',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
- if(!['SEND_TEST_V0616','FORWARD_TEST_V0616','SEND_FORWARD_TEST_V0616','CHANNEL_FORWARD_TEST_V0616'].includes(msg?.type))return;
+ if(msg?.type==='WA_TEST_PING_V0617'){reply({ok:true,version:'0.6.17',hasMain:!!document.querySelector('#main'),hasSide:!!document.querySelector('#side')});return;}
+ if(!['SEND_TEST_V0617','FORWARD_TEST_V0617','SEND_FORWARD_TEST_V0617','CHANNEL_FORWARD_TEST_V0617'].includes(msg?.type))return;
  if(sending){reply({ok:false,error:'כבר מתבצע ניסיון שליחה'});return;}
  sending=true;
- const promise=msg.type==='CHANNEL_FORWARD_TEST_V0616'
+ const promise=msg.type==='CHANNEL_FORWARD_TEST_V0617'
   ?forwardLastChannelUpdateToTest(msg.source,msg.target,msg.id)
-  :msg.type==='SEND_FORWARD_TEST_V0616'
+  :msg.type==='SEND_FORWARD_TEST_V0617'
    ?sendThenForwardTest(msg.text,msg.attachment,msg.group,msg.target)
-  :msg.type==='FORWARD_TEST_V0616'
+  :msg.type==='FORWARD_TEST_V0617'
    ?forwardLastTestMessage(msg.source,msg.target)
    :send(msg.text,msg.group,msg.attachment);
  promise.then(reply).catch(e=>reply({ok:false,error:String(e.message||e),metrics:metrics()})).finally(()=>{sending=false;activeSendingGroup=''});
